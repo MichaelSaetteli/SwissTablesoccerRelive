@@ -152,6 +152,44 @@ def ensure_pipeline_dirs(config: PipelineConfig) -> None:
         directory.mkdir(parents=True, exist_ok=True)
 
 
+def save_config(config: PipelineConfig) -> None:
+    """Atomically write *config* back to its source file.
+
+    Used by the Web-Interface to persist YouTube metadata edits without
+    losing the rest of the file (paths, constants).
+    """
+    if config.source_path is None:
+        raise ConfigError("config.source_path is None - cannot save")
+
+    data = {
+        "discipline": config.discipline,
+        "enabled": config.enabled,
+        "paths": {
+            "eingang": str(config.paths.eingang),
+            "work": str(config.paths.work),
+            "output": str(config.paths.output),
+            "logs": str(config.paths.logs),
+        },
+        "filename_constants": {
+            "k1": config.filename_constants.k1,
+            "k2": config.filename_constants.k2,
+            "k4": config.filename_constants.k4,
+            "k5": config.filename_constants.k5,
+            "k6": config.filename_constants.k6,
+        },
+        "ffmpeg": dict(config.ffmpeg),
+        "youtube": dict(config.youtube),
+    }
+
+    path = config.source_path
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
 # ---------------------------------------------------------------------------
 # Filename builder
 # ---------------------------------------------------------------------------

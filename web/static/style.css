@@ -1,0 +1,178 @@
+/* Minimal styling - keep payload small for the NAS Quick-Connect tunnel. */
+:root {
+  --bg: #f4f6f9;
+  --card-bg: #ffffff;
+  --text: #1a1f2e;
+  --muted: #6a7689;
+  --primary: #1f6feb;
+  --primary-hover: #1858c4;
+  --error: #c1271a;
+  --ok: #18874f;
+  --border: #d8dde6;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  background: #1a1f2e;
+  color: #fff;
+}
+.topbar .brand { font-weight: 600; letter-spacing: 0.02em; }
+.topnav { display: flex; gap: 1rem; align-items: center; }
+.topnav a { color: #fff; text-decoration: underline; }
+.topnav .user { color: #c5cdd9; }
+
+.content {
+  max-width: 1100px;
+  margin: 1.5rem auto;
+  padding: 0 1.25rem;
+}
+
+.footer {
+  text-align: center;
+  padding: 1rem;
+  color: var(--muted);
+}
+
+/* Flash messages */
+.flashes { list-style: none; padding: 0; margin: 0 0 1rem; }
+.flash { padding: 0.5rem 0.75rem; border-radius: 4px; margin-bottom: 0.5rem; }
+.flash-error { background: #fde2df; color: var(--error); }
+
+/* Login */
+.login-card {
+  max-width: 360px;
+  margin: 4rem auto;
+  background: var(--card-bg);
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.login-form { display: flex; flex-direction: column; gap: 0.75rem; }
+.login-form label { display: flex; flex-direction: column; gap: 0.25rem; }
+.login-form input {
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* Tabs */
+.tabbar {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 1rem;
+}
+.tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  padding: 0.6rem 1.25rem;
+  cursor: pointer;
+  font-size: 1rem;
+  border-radius: 4px 4px 0 0;
+  color: var(--muted);
+}
+.tab[aria-selected="true"] {
+  background: var(--card-bg);
+  color: var(--text);
+  font-weight: 600;
+}
+.tab[disabled] { opacity: 0.4; cursor: not-allowed; }
+.badge {
+  background: #fcefb4;
+  color: #6a4d00;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  margin-left: 0.5rem;
+  border-radius: 3px;
+}
+
+.tabpanel { display: none; }
+.tabpanel.active { display: grid; gap: 1rem; }
+
+/* Cards */
+.card {
+  background: var(--card-bg);
+  padding: 1rem 1.25rem;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.card h2 { margin-top: 0; }
+.hint { color: var(--muted); margin-top: 0; font-size: 0.9rem; }
+.empty { color: var(--muted); font-style: italic; }
+.error { color: var(--error); font-weight: 600; }
+
+/* Buttons */
+button, .btn-zip {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  text-decoration: none;
+  display: inline-block;
+}
+button:hover, .btn-zip:hover { background: var(--primary-hover); }
+button[disabled] { background: var(--muted); cursor: not-allowed; }
+
+/* Log + forms */
+.log {
+  background: #1a1f2e;
+  color: #c5cdd9;
+  padding: 0.75rem;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  max-height: 240px;
+  overflow-y: auto;
+  border-radius: 4px;
+  white-space: pre-wrap;
+}
+
+form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.9rem;
+}
+form label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+form input, form textarea {
+  padding: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+}
+fieldset { border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem 1rem; }
+legend { font-weight: 600; padding: 0 0.4rem; }
+
+.save-status { margin-left: 0.5rem; font-size: 0.85rem; color: var(--ok); }
+
+.files { list-style: none; padding: 0; margin: 0 0 0.75rem; }
+.files li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.files li:last-child { border-bottom: none; }
+.files a { color: var(--primary); text-decoration: none; }
+.files a:hover { text-decoration: underline; }
+.size { color: var(--muted); font-size: 0.85rem; }

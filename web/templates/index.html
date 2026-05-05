@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Pipeline-Status{% endblock %}
+{% block body %}
+<section class="tabs">
+  <nav class="tabbar" role="tablist">
+    {% for d in disciplines %}
+      <button class="tab"
+              data-tab="{{ d.name }}"
+              role="tab"
+              {% if not d.available %}disabled title="Diese Disziplin ist nicht konfiguriert"{% endif %}>
+        {{ d.name }}
+        {% if d.available and not d.enabled %}<span class="badge">deaktiviert</span>{% endif %}
+      </button>
+    {% endfor %}
+  </nav>
+
+  {% for d in disciplines %}
+    <article class="tabpanel"
+             id="panel-{{ d.name }}"
+             data-discipline="{{ d.name }}"
+             {% if not d.available %}aria-disabled="true"{% endif %}>
+      {% if not d.available %}
+        <p class="empty">Disziplin "{{ d.name }}" ist nicht konfiguriert. Lege eine
+          <code>config_{{ d.name|lower }}.json</code> an, damit dieser Tab
+          aktiv wird.</p>
+      {% else %}
+        <!-- 1. Upload-Status -->
+        <section class="card status-card">
+          <h2>Status</h2>
+          <p class="state">
+            Zustand: <strong data-field="state">--</strong>
+          </p>
+          <p>Erkannte Ordner: <span data-field="folders_detected">--</span></p>
+          <p>Verarbeitet: <span data-field="folders_processed">--</span></p>
+          <p>Gestartet: <span data-field="started_at">--</span></p>
+          <p>Aktualisiert: <span data-field="updated_at">--</span></p>
+          <p class="error" data-field="error" hidden></p>
+        </section>
+
+        <!-- 2. Pipeline-Steuerung -->
+        <section class="card control-card">
+          <h2>Steuerung</h2>
+          <p class="hint">
+            Manueller Start ist ein Fallback - normalerweise erkennt der
+            Folder-Watcher den Upload automatisch.
+          </p>
+          <button data-action="run" {% if not d.enabled %}disabled{% endif %}>
+            Pipeline starten
+          </button>
+          <h3>Log</h3>
+          <pre class="log" data-field="log_tail"></pre>
+        </section>
+
+        <!-- 3. YouTube-Konfiguration -->
+        <section class="card youtube-card">
+          <h2>YouTube-Konfiguration</h2>
+          <p class="hint">
+            Wird in Schritt 4 (Upload) verwendet. Aenderungen werden sofort
+            gespeichert.
+          </p>
+          <form data-form="youtube">
+            <label>Turniername
+              <input type="text" name="tournament_name">
+            </label>
+            <label>Datum
+              <input type="text" name="date" placeholder="17./18. Mai 2026">
+            </label>
+            <label>Ort
+              <input type="text" name="location" placeholder="Bern, Schweiz">
+            </label>
+            <label>Titel-Template
+              <input type="text" name="title_template"
+                     placeholder="{turniername} {disziplin} {kamera} Part {nummer}">
+            </label>
+            <label>Beschreibungs-Template
+              <textarea name="description_template" rows="3"></textarea>
+            </label>
+            <fieldset>
+              <legend>Playlist</legend>
+              <label class="inline">
+                <input type="radio" name="playlist_mode" value="new" checked>
+                Neu anlegen
+              </label>
+              <input type="text" name="playlist_new_title" placeholder="Playlist-Titel">
+              <label class="inline">
+                <input type="radio" name="playlist_mode" value="existing">
+                Bestehende ID
+              </label>
+              <input type="text" name="playlist_id" placeholder="YouTube Playlist-ID">
+            </fieldset>
+            <button type="submit">Speichern</button>
+            <span class="save-status" data-form-status hidden></span>
+          </form>
+        </section>
+
+        <!-- 4. YouTube-Upload (Schritt 4) -->
+        <section class="card youtube-upload-card">
+          <h2>YouTube-Upload</h2>
+          <p class="hint">Wird in Schritt 4 implementiert.</p>
+          <button disabled>Upload starten</button>
+        </section>
+
+        <!-- 5. Download -->
+        <section class="card download-card">
+          <h2>Download</h2>
+          <ul class="files" data-field="files">
+            <li class="empty">Noch keine Videos vorhanden.</li>
+          </ul>
+          <a class="btn-zip"
+             href="{{ url_for('download.download_all_zip', discipline=d.name) }}">
+            Alle als ZIP herunterladen
+          </a>
+        </section>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}
