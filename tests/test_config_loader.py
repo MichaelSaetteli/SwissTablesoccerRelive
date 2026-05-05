@@ -26,7 +26,8 @@ def test_load_config_happy_path(doppel_config_path: Path) -> None:
     assert cfg.max_workers == 2
     assert cfg.max_files_per_folder == 24
     assert cfg.source_path == doppel_config_path
-    assert cfg.filename_constants.k1 == "2026"
+    assert cfg.filename_constants.jahr == "2026"
+    assert cfg.filename_constants.turniername == "Seetal"
 
 
 def test_load_config_missing_file(tmp_path: Path) -> None:
@@ -46,6 +47,15 @@ def test_load_config_missing_top_level_key(tmp_path: Path,
 def test_load_config_missing_path_key(tmp_path: Path,
                                       doppel_config_dict: dict) -> None:
     del doppel_config_dict["paths"]["eingang"]
+    path = tmp_path / "broken.json"
+    path.write_text(json.dumps(doppel_config_dict), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(path)
+
+
+def test_load_config_missing_constant_key(tmp_path: Path,
+                                          doppel_config_dict: dict) -> None:
+    del doppel_config_dict["filename_constants"]["turniername"]
     path = tmp_path / "broken.json"
     path.write_text(json.dumps(doppel_config_dict), encoding="utf-8")
     with pytest.raises(ConfigError):
@@ -72,14 +82,16 @@ def test_ensure_pipeline_dirs_creates_all(doppel_config_path: Path) -> None:
 
 # ---- parse_folder_name ----------------------------------------------------
 
-def test_parse_folder_name_4chars() -> None:
+def test_parse_folder_name_no_split() -> None:
+    assert parse_folder_name("ET01") == ("T01", None)
     assert parse_folder_name("ET03") == ("T03", None)
     assert parse_folder_name("ET18") == ("T18", None)
 
 
-def test_parse_folder_name_6chars() -> None:
+def test_parse_folder_name_with_split() -> None:
     assert parse_folder_name("ET03_1") == ("T03", "1")
-    assert parse_folder_name("ET18_2") == ("T18", "2")
+    assert parse_folder_name("ET01_2") == ("T01", "2")
+    assert parse_folder_name("ET18_3") == ("T18", "3")
 
 
 def test_parse_folder_name_invalid() -> None:
@@ -94,29 +106,55 @@ def test_parse_folder_name_invalid() -> None:
 # ---- build_output_filename ------------------------------------------------
 
 def _consts(**overrides) -> FilenameConstants:
-    base = dict(k1="2026", k2="STS02", k4="Doppel", k5="Part", k6="")
+    base = dict(
+        jahr="2026",
+        sts_nummer="STS2",
+        turniername="Seetal",
+        disziplin="Doppel",
+        part="",
+    )
     base.update(overrides)
     return FilenameConstants(**base)
 
 
-def test_build_output_filename_briefing_example() -> None:
-    """Matches the example in PROJEKT_BRIEFING.md section 1."""
-    name = build_output_filename(_consts(), "ET03_1")
-    assert name == "2026 STS02 T03 Doppel Part 1.mp4"
+def test_build_output_filename_operator_example() -> None:
+    """Matches the operator's example: '2026 STS2 T01 Seetal Doppel'."""
+    name = build_output_filename(_consts(), "ET01")
+    assert name == "2026 STS2 T01 Seetal Doppel.mp4"
 
 
-def test_build_output_filename_4char_short_schema() -> None:
-    name = build_output_filename(_consts(), "ET05")
-    # k6 empty + variableB absent -> filtered out, no double spaces
-    assert name == "2026 STS02 T05 Doppel Part.mp4"
+def test_build_output_filename_with_user_part() -> None:
+    name = build_output_filename(_consts(part="Part 1"), "ET01")
+    assert name == "2026 STS2 T01 Seetal Doppel Part 1.mp4"
+
+
+def test_build_output_filename_split_overrides_user_part_option_b() -> None:
+    """Option B: split index becomes 'Part N' and overrides any user part."""
+    consts = _consts(part="Part 99")  # user value should be ignored
+    assert (
+        build_output_filename(consts, "ET01_1")
+        == "2026 STS2 T01 Seetal Doppel Part 1.mp4"
+    )
+    assert (
+        build_output_filename(consts, "ET01_2")
+        == "2026 STS2 T01 Seetal Doppel Part 2.mp4"
+    )
+
+
+def test_build_output_filename_split_with_empty_user_part() -> None:
+    consts = _consts(part="")
+    assert (
+        build_output_filename(consts, "ET05_3")
+        == "2026 STS2 T05 Seetal Doppel Part 3.mp4"
+    )
 
 
 def test_build_output_filename_filters_empty_constants() -> None:
-    name = build_output_filename(_consts(k5=""), "ET03_2")
-    assert name == "2026 STS02 T03 Doppel 2.mp4"
+    name = build_output_filename(_consts(turniername=""), "ET03")
+    assert name == "2026 STS2 T03 Doppel.mp4"
     assert "  " not in name
 
 
-def test_build_output_filename_includes_k6_when_set() -> None:
-    name = build_output_filename(_consts(k6="Final"), "ET03_3")
-    assert name == "2026 STS02 T03 Doppel Part Final 3.mp4"
+def test_build_output_filename_einzel_discipline() -> None:
+    name = build_output_filename(_consts(disziplin="Einzel"), "ET07")
+    assert name == "2026 STS2 T07 Seetal Einzel.mp4"

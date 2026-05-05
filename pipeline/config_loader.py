@@ -24,7 +24,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 REQUIRED_TOP_LEVEL = ("discipline", "paths", "filename_constants")
 REQUIRED_PATHS = ("eingang", "work", "output", "logs")
-REQUIRED_CONSTANTS = ("k1", "k2", "k4", "k5", "k6")
+REQUIRED_CONSTANTS = ("jahr", "sts_nummer", "turniername", "disziplin", "part")
 ALLOWED_DISCIPLINES = ("Doppel", "Einzel")
 
 
@@ -38,15 +38,31 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class FilenameConstants:
-    """Static parts of the output filename (per discipline)."""
-    k1: str
-    k2: str
-    k4: str
-    k5: str
-    k6: str
+    """User-defined constants that build the output filename.
 
-    def as_list(self) -> List[str]:
-        return [self.k1, self.k2, self.k4, self.k5, self.k6]
+    Schema agreed with the operator:
+
+        {jahr} {sts_nummer} {tischnummer} {turniername} {disziplin} [{part}]
+        2026   STS2          T01           Seetal        Doppel       Part 1
+
+    ``tischnummer`` is *not* in this dataclass - it is the variable part
+    extracted from the folder name (see ``parse_folder_name``).
+    ``part`` is optional; when empty it is filtered out.
+    """
+    jahr: str
+    sts_nummer: str
+    turniername: str
+    disziplin: str
+    part: str
+
+    def as_dict(self) -> Dict[str, str]:
+        return {
+            "jahr": self.jahr,
+            "sts_nummer": self.sts_nummer,
+            "turniername": self.turniername,
+            "disziplin": self.disziplin,
+            "part": self.part,
+        }
 
 
 @dataclass(frozen=True)
@@ -128,11 +144,11 @@ def load_config(path: str | os.PathLike) -> PipelineConfig:
         logs=Path(data["paths"]["logs"]),
     )
     constants = FilenameConstants(
-        k1=str(data["filename_constants"]["k1"]),
-        k2=str(data["filename_constants"]["k2"]),
-        k4=str(data["filename_constants"]["k4"]),
-        k5=str(data["filename_constants"]["k5"]),
-        k6=str(data["filename_constants"]["k6"]),
+        jahr=str(data["filename_constants"]["jahr"]),
+        sts_nummer=str(data["filename_constants"]["sts_nummer"]),
+        turniername=str(data["filename_constants"]["turniername"]),
+        disziplin=str(data["filename_constants"]["disziplin"]),
+        part=str(data["filename_constants"]["part"]),
     )
 
     return PipelineConfig(
@@ -155,8 +171,8 @@ def ensure_pipeline_dirs(config: PipelineConfig) -> None:
 def save_config(config: PipelineConfig) -> None:
     """Atomically write *config* back to its source file.
 
-    Used by the Web-Interface to persist YouTube metadata edits without
-    losing the rest of the file (paths, constants).
+    Used by the Web-Interface to persist filename and YouTube edits
+    without losing the rest of the file (paths, ffmpeg settings).
     """
     if config.source_path is None:
         raise ConfigError("config.source_path is None - cannot save")
@@ -170,13 +186,7 @@ def save_config(config: PipelineConfig) -> None:
             "output": str(config.paths.output),
             "logs": str(config.paths.logs),
         },
-        "filename_constants": {
-            "k1": config.filename_constants.k1,
-            "k2": config.filename_constants.k2,
-            "k4": config.filename_constants.k4,
-            "k5": config.filename_constants.k5,
-            "k6": config.filename_constants.k6,
-        },
+        "filename_constants": config.filename_constants.as_dict(),
         "ffmpeg": dict(config.ffmpeg),
         "youtube": dict(config.youtube),
     }
@@ -196,23 +206,38 @@ def save_config(config: PipelineConfig) -> None:
 # ---------------------------------------------------------------------------
 
 def parse_folder_name(folder_name: str) -> tuple[str, str | None]:
-    """Extract (variableA, variableB) from an ET-folder name.
+    """Return ``(tischnummer, split_index)`` for an ET-folder name.
 
-    Convention from PROJEKT_BRIEFING.md section 1:
-      * 4-character folders (e.g. ``ET03``)         -> variableA only
-      * 6-character folders (e.g. ``ET03_1``)       -> variableA + variableB
+    Examples:
+        ``ET03``   -> ``("T03", None)``
+        ``ET01``   -> ``("T01", None)``
+        ``ET03_1`` -> ``("T03", "1")``   (split by organize_folders.py)
+        ``ET03_2`` -> ``("T03", "2")``
 
-    The leading ``E`` is stripped so ``ET03`` becomes ``T03`` (matches the
-    example "2026 STS02 T03 Doppel Part 1.mp4").
+    The leading ``E`` is stripped so ``ETxx`` becomes ``Txx``. Any
+    ``_<n>`` suffix (the split index) is returned separately so the
+    filename builder can apply Option B: auto-emit ``Part 1``,
+    ``Part 2`` for split folders, overriding the user's ``part`` field.
     """
     name = folder_name.strip()
-    if len(name) == 4 and name.startswith("ET"):
-        return name[1:], None
-    if len(name) == 6 and name.startswith("ET") and name[4] == "_":
-        return name[1:4], name[5]
+    if not name.startswith("ET"):
+        raise ValueError(
+            f"Folder name {folder_name!r} does not match ET-pattern "
+            f"(must start with 'ET')"
+        )
+    rest = name[1:]
+    if len(rest) < 3 or rest[0] != "T" or not rest[1:3].isdigit():
+        raise ValueError(
+            f"Folder name {folder_name!r} does not match ET-pattern "
+            f"(expected ETxx or ETxx_<suffix>)"
+        )
+    if len(rest) == 3:
+        return rest, None  # ET03 -> T03
+    if rest[3] == "_" and len(rest) > 4:
+        return rest[:3], rest[4:]  # ET03_1 -> T03, 1
     raise ValueError(
-        f"Folder name {folder_name!r} does not match ET-pattern "
-        f"(expected ETxx or ETxx_y)"
+        f"Folder name {folder_name!r} has unexpected suffix; "
+        f"expected ETxx or ETxx_<suffix>"
     )
 
 
@@ -220,24 +245,31 @@ def build_output_filename(
     constants: FilenameConstants,
     folder_name: str,
 ) -> str:
-    """Build the FFmpeg output filename per the briefing rules.
+    """Build the merged-output filename.
 
-    Empty constants are filtered out so we never emit double spaces.
+    Schema:
+        {jahr} {sts_nummer} {tischnummer} {turniername} {disziplin} [{part}].mp4
+
+    Split folders (Option B): when the folder name carries a ``_<n>``
+    suffix from organize_folders.py, the ``part`` field is auto-set to
+    ``"Part <n>"`` and the user's configured ``part`` is overridden.
+    Otherwise the configured ``part`` (possibly empty) is used as-is.
+    Empty fields are filtered out so we never emit double spaces.
     """
-    variable_a, variable_b = parse_folder_name(folder_name)
-    constants_list = constants.as_list()
-    # Schema order: k1, k2, variableA, k4, k5, k6, variableB
-    parts: List[str] = [
-        constants_list[0],   # k1
-        constants_list[1],   # k2
-        variable_a,
-        constants_list[2],   # k4
-        constants_list[3],   # k5
-        constants_list[4],   # k6
-    ]
-    if variable_b is not None:
-        parts.append(variable_b)
+    tischnummer, split_index = parse_folder_name(folder_name)
+    if split_index is not None:
+        effective_part = f"Part {split_index}"
+    else:
+        effective_part = constants.part
 
+    parts: List[str] = [
+        constants.jahr,
+        constants.sts_nummer,
+        tischnummer,
+        constants.turniername,
+        constants.disziplin,
+        effective_part,
+    ]
     filtered = [str(p) for p in parts if str(p).strip()]
     return " ".join(filtered) + ".mp4"
 

@@ -51,7 +51,41 @@
           <pre class="log" data-field="log_tail"></pre>
         </section>
 
-        <!-- 3. YouTube-Konfiguration -->
+        <!-- 3a. Datei-Benennung (Filename-Konstanten) -->
+        <section class="card filename-card">
+          <h2>Datei-Benennung</h2>
+          <p class="hint">
+            Schema:
+            <code>{jahr} {sts_nummer} {tischnummer} {turniername} {disziplin} [{part}].mp4</code><br>
+            <em>Tischnummer</em> kommt aus dem Ordnernamen (ET01 -> T01).
+            <em>Part</em> ist optional - bei Splits (>24 MP4s) wird er
+            automatisch durch "Part 1", "Part 2", ... ersetzt.
+          </p>
+          <form data-form="filename">
+            <label>Jahr
+              <input type="text" name="jahr" placeholder="2026">
+            </label>
+            <label>STS-Nummer
+              <input type="text" name="sts_nummer" placeholder="STS2">
+            </label>
+            <label>Turniername
+              <input type="text" name="turniername" placeholder="Seetal">
+            </label>
+            <label>Disziplin
+              <input type="text" name="disziplin" placeholder="Doppel">
+            </label>
+            <label>Part (optional)
+              <input type="text" name="part" placeholder="z.B. Part 1 - leer lassen wenn nicht gebraucht">
+            </label>
+            <p class="preview-line">
+              Vorschau: <code data-field="filename_preview">--</code>
+            </p>
+            <button type="submit">Speichern</button>
+            <span class="save-status" data-form-status hidden></span>
+          </form>
+        </section>
+
+        <!-- 3b. YouTube-Konfiguration -->
         <section class="card youtube-card">
           <h2>YouTube-Konfiguration</h2>
           <p class="hint">

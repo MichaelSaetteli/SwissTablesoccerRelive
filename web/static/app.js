@@ -134,6 +134,84 @@
     });
   }
 
+  // ----- Filename constants form (live preview + save) -------------------
+  function buildPreview(values) {
+    // Mirror pipeline.config_loader.build_output_filename:
+    // {jahr} {sts_nummer} {tischnummer} {turniername} {disziplin} [{part}].mp4
+    const example = "T01"; // mock tischnummer for the preview
+    const parts = [
+      values.jahr, values.sts_nummer, example,
+      values.turniername, values.disziplin, values.part,
+    ];
+    const filtered = parts.map((p) => (p || "").trim()).filter(Boolean);
+    return filtered.join(" ") + ".mp4";
+  }
+
+  function readFilenameForm(form) {
+    return {
+      jahr: form.elements.jahr.value,
+      sts_nummer: form.elements.sts_nummer.value,
+      turniername: form.elements.turniername.value,
+      disziplin: form.elements.disziplin.value,
+      part: form.elements.part.value,
+    };
+  }
+
+  function updateFilenamePreview(form) {
+    const preview = form.querySelector('[data-field="filename_preview"]');
+    if (preview) preview.textContent = buildPreview(readFilenameForm(form));
+  }
+
+  async function loadFilenameConfig(panel) {
+    const form = panel.querySelector('[data-form="filename"]');
+    if (!form) return;
+    const discipline = panel.dataset.discipline;
+    try {
+      const res = await fetch(`/api/filename-config/${discipline}`, {
+        credentials: "same-origin",
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      ["jahr", "sts_nummer", "turniername", "disziplin", "part"].forEach((k) => {
+        if (form.elements[k]) form.elements[k].value = data[k] || "";
+      });
+      updateFilenamePreview(form);
+    } catch (e) {
+      console.warn("load filename config failed", e);
+    }
+  }
+
+  function bindFilenameForms() {
+    document.querySelectorAll('[data-form="filename"]').forEach((form) => {
+      form.addEventListener("input", () => updateFilenamePreview(form));
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const panel = form.closest(".tabpanel");
+        const discipline = panel.dataset.discipline;
+        const status = form.querySelector("[data-form-status]");
+        try {
+          const res = await fetch(`/api/filename-config/${discipline}`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(readFilenameForm(form)),
+          });
+          if (status) {
+            status.textContent = res.ok ? "Gespeichert." : "Fehler beim Speichern.";
+            status.hidden = false;
+            setTimeout(() => { status.hidden = true; }, 3000);
+          }
+        } catch (e) {
+          if (status) {
+            status.textContent = `Fehler: ${e}`;
+            status.hidden = false;
+          }
+        }
+      });
+    });
+  }
+
   // ----- YouTube config form ---------------------------------------------
   async function loadYoutubeConfig(panel) {
     const form = panel.querySelector('[data-form="youtube"]');
@@ -193,6 +271,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     bindTabs();
     bindRunButtons();
+    bindFilenameForms();
     bindYoutubeForms();
 
     const panels = Array.from(
@@ -200,6 +279,7 @@
     ).filter((p) => p.getAttribute("aria-disabled") !== "true");
 
     panels.forEach((panel) => {
+      loadFilenameConfig(panel);
       loadYoutubeConfig(panel);
       pollStatus(panel);
       setInterval(() => pollStatus(panel), POLL_MS);

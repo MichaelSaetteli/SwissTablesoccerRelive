@@ -10,12 +10,12 @@
     "logs": "/volume1/video-pipeline/logs"
   },
   "filename_constants": {
-    "_comment": "Statische Teile des Dateinamens. Reihenfolge im Dateinamen: k1 k2 variableA k4 k5 k6 [variableB]. Leere Werte werden gefiltert.",
-    "k1": "2026",
-    "k2": "STS02",
-    "k4": "Doppel",
-    "k5": "Part",
-    "k6": ""
+    "_comment": "Schema: {jahr} {sts_nummer} {tischnummer} {turniername} {disziplin} [{part}].mp4. tischnummer wird aus dem Ordnernamen abgeleitet (ET01 -> T01). Leere Felder werden im Dateinamen weggelassen.",
+    "jahr": "2026",
+    "sts_nummer": "STS2",
+    "turniername": "Seetal",
+    "disziplin": "Doppel",
+    "part": ""
   },
   "ffmpeg": {
     "max_workers": 4,

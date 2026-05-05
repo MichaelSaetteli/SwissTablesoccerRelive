@@ -10,7 +10,11 @@ import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from pipeline.config_loader import PipelineConfig, save_config
+from pipeline.config_loader import (
+    FilenameConstants,
+    PipelineConfig,
+    save_config,
+)
 from watcher.pipeline_runner import (
     PipelineRunError,
     run_pipeline,
@@ -108,6 +112,42 @@ def start_run_async(
 # ---------------------------------------------------------------------------
 # YouTube config (Schritt 3 only persists; upload comes in Schritt 4)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Filename constants (operator-defined per processing run)
+# ---------------------------------------------------------------------------
+
+FILENAME_FIELDS = (
+    "jahr",
+    "sts_nummer",
+    "turniername",
+    "disziplin",
+    "part",
+)
+
+
+def get_filename_config(config: PipelineConfig) -> Dict[str, str]:
+    return config.filename_constants.as_dict()
+
+
+def update_filename_config(
+    config: PipelineConfig, payload: Dict[str, object],
+) -> Dict[str, str]:
+    """Merge *payload* into ``config.filename_constants`` and persist atomically.
+
+    Unknown keys are ignored so a malformed front-end payload cannot
+    pollute the config. Empty strings are allowed (e.g. ``part`` is
+    intentionally optional).
+    """
+    current = config.filename_constants.as_dict()
+    for key in FILENAME_FIELDS:
+        if key in payload:
+            value = payload[key]
+            current[key] = "" if value is None else str(value).strip()
+    config.filename_constants = FilenameConstants(**current)
+    save_config(config)
+    return get_filename_config(config)
+
 
 YOUTUBE_FIELDS = (
     "tournament_name",

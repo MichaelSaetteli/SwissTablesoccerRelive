@@ -37,7 +37,11 @@ def einzel_config_dict(tmp_path: Path) -> dict:
             "logs": str(tmp_path / "logs"),
         },
         "filename_constants": {
-            "k1": "2026", "k2": "STS02", "k4": "Einzel", "k5": "Part", "k6": "",
+            "jahr": "2026",
+            "sts_nummer": "STS2",
+            "turniername": "Seetal",
+            "disziplin": "Einzel",
+            "part": "",
         },
         "ffmpeg": {"max_workers": 2, "max_files_per_folder": 24},
         "youtube": {},
@@ -333,6 +337,63 @@ def test_post_youtube_config_persists_to_disk(app, client, doppel_config_path: P
     saved = json.loads(doppel_config_path.read_text(encoding="utf-8"))
     assert saved["youtube"]["tournament_name"] == "STS Bern 2026"
     assert saved["youtube"]["playlist_create_new"] is True
+
+
+def test_get_filename_config_returns_current(client) -> None:
+    _login(client)
+    data = client.get("/api/filename-config/Doppel").get_json()
+    assert data["jahr"] == "2026"
+    assert data["sts_nummer"] == "STS2"
+    assert data["turniername"] == "Seetal"
+    assert data["disziplin"] == "Doppel"
+    assert data["part"] == ""
+
+
+def test_post_filename_config_persists(app, client, doppel_config_path: Path) -> None:
+    _login(client)
+    payload = {
+        "jahr": "2027",
+        "sts_nummer": "STS3",
+        "turniername": "Bern",
+        "disziplin": "Doppel",
+        "part": "Part 1",
+    }
+    res = client.post(
+        "/api/filename-config/Doppel",
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    assert res.status_code == 200
+    saved = json.loads(doppel_config_path.read_text(encoding="utf-8"))
+    assert saved["filename_constants"]["jahr"] == "2027"
+    assert saved["filename_constants"]["turniername"] == "Bern"
+    assert saved["filename_constants"]["part"] == "Part 1"
+
+
+def test_post_filename_config_rejects_unknown_keys(app, client, doppel_config_path: Path) -> None:
+    _login(client)
+    payload = {"jahr": "2099", "evil": "x"}
+    client.post(
+        "/api/filename-config/Doppel",
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    saved = json.loads(doppel_config_path.read_text(encoding="utf-8"))
+    assert "evil" not in saved["filename_constants"]
+    assert saved["filename_constants"]["jahr"] == "2099"
+
+
+def test_post_filename_config_strips_whitespace(app, client, doppel_config_path: Path) -> None:
+    _login(client)
+    payload = {"jahr": "  2026  ", "turniername": " Seetal "}
+    client.post(
+        "/api/filename-config/Doppel",
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    saved = json.loads(doppel_config_path.read_text(encoding="utf-8"))
+    assert saved["filename_constants"]["jahr"] == "2026"
+    assert saved["filename_constants"]["turniername"] == "Seetal"
 
 
 def test_post_youtube_config_rejects_unknown_keys(app, client, doppel_config_path: Path) -> None:

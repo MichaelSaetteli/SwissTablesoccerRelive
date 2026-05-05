@@ -130,7 +130,7 @@ def test_merge_folder_calls_runner_with_expected_argv(
 
     assert result.success is True
     assert result.returncode == 0
-    expected_name = "2026 STS02 T03 Doppel Part 1.mp4"
+    expected_name = "2026 STS2 T03 Seetal Doppel Part 1.mp4"
     assert result.output.name == expected_name
     assert result.output.parent == cfg.paths.output
 
@@ -187,9 +187,9 @@ def test_merge_all_processes_each_folder(tmp_path: Path,
     assert all(r.success for r in results)
     output_names = sorted(r.output.name for r in results)
     assert output_names == [
-        "2026 STS02 T03 Doppel Part 1.mp4",
-        "2026 STS02 T03 Doppel Part 2.mp4",
-        "2026 STS02 T04 Doppel Part.mp4",
+        "2026 STS2 T03 Seetal Doppel Part 1.mp4",
+        "2026 STS2 T03 Seetal Doppel Part 2.mp4",
+        "2026 STS2 T04 Seetal Doppel.mp4",
     ]
     assert len(runner.calls) == 3
 

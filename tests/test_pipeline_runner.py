@@ -92,7 +92,9 @@ def test_run_pipeline_happy_path(monkeypatch, doppel_config_path: Path) -> None:
     assert sorted(s.folders_processed) == ["ET03", "ET04"]
     assert len(s.output_files) == 2
     # Output files must follow the briefing schema
-    assert any("T03 Doppel Part" in name for name in s.output_files)
+    # Non-split folder (5 mp4s) -> no auto Part suffix.
+    assert any("T03 Seetal Doppel.mp4" in name for name in s.output_files)
+    assert any("T04 Seetal Doppel.mp4" in name for name in s.output_files)
     # Eingang must be empty after the move step
     assert detect_folders(cfg.paths.eingang) == []
     # Status file was persisted

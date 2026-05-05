@@ -158,6 +158,19 @@ def api_run(discipline: str):
     return jsonify({"status": "scheduled", "discipline": discipline}), 202
 
 
+@api_bp.route("/filename-config/<discipline>", methods=["GET", "POST"])
+@login_required
+def api_filename_config(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or {}
+        updated = services.update_filename_config(config, payload)
+        return jsonify(updated)
+    return jsonify(services.get_filename_config(config))
+
+
 @api_bp.route("/youtube-config/<discipline>", methods=["GET", "POST"])
 @login_required
 def api_youtube_config(discipline: str):

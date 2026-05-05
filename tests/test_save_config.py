@@ -19,7 +19,8 @@ def test_save_config_round_trip(doppel_config_path: Path) -> None:
     assert reloaded.youtube["playlist_create_new"] is False
     # Other fields stay intact
     assert reloaded.discipline == cfg.discipline
-    assert reloaded.filename_constants.k1 == cfg.filename_constants.k1
+    assert reloaded.filename_constants.jahr == cfg.filename_constants.jahr
+    assert reloaded.filename_constants.turniername == cfg.filename_constants.turniername
 
 
 def test_save_config_atomic(doppel_config_path: Path) -> None:
