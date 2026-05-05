@@ -1,0 +1,35 @@
+{
+  "_comment": "Vorlage fuer config_doppel.json / config_einzel.json. Kopiere diese Datei und fuelle alle Werte aus. Keine Kommentare im echten JSON belassen.",
+  "discipline": "Doppel",
+  "enabled": true,
+  "paths": {
+    "_comment": "Absolute Pfade auf dem NAS-Volume. Auf dem DS1522+ liegen alle unter /volume1/video-pipeline/.",
+    "eingang": "/volume1/video-pipeline/eingang_doppel",
+    "work": "/volume1/video-pipeline/work_doppel",
+    "output": "/volume1/video-pipeline/output_doppel",
+    "logs": "/volume1/video-pipeline/logs"
+  },
+  "filename_constants": {
+    "_comment": "Statische Teile des Dateinamens. Reihenfolge im Dateinamen: k1 k2 variableA k4 k5 k6 [variableB]. Leere Werte werden gefiltert.",
+    "k1": "2026",
+    "k2": "STS02",
+    "k4": "Doppel",
+    "k5": "Part",
+    "k6": ""
+  },
+  "ffmpeg": {
+    "max_workers": 4,
+    "max_files_per_folder": 24
+  },
+  "youtube": {
+    "_comment": "Wird in Schritt 4 voll genutzt. Hier nur Platzhalter.",
+    "tournament_name": "",
+    "date": "",
+    "location": "",
+    "title_template": "{turniername} {disziplin} {kamera} Part {nummer}",
+    "description_template": "Aufnahme vom {datum} in {ort}. Disziplin: {disziplin}. Kamera: {kamera}.",
+    "playlist_id": "",
+    "playlist_create_new": true,
+    "playlist_new_title": ""
+  }
+}

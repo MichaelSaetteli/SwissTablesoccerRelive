@@ -1,0 +1,31 @@
+{
+  "discipline": "Einzel",
+  "enabled": true,
+  "paths": {
+    "eingang": "/volume1/video-pipeline/eingang_einzel",
+    "work": "/volume1/video-pipeline/work_einzel",
+    "output": "/volume1/video-pipeline/output_einzel",
+    "logs": "/volume1/video-pipeline/logs"
+  },
+  "filename_constants": {
+    "k1": "2026",
+    "k2": "STS02",
+    "k4": "Einzel",
+    "k5": "Part",
+    "k6": ""
+  },
+  "ffmpeg": {
+    "max_workers": 4,
+    "max_files_per_folder": 24
+  },
+  "youtube": {
+    "tournament_name": "",
+    "date": "",
+    "location": "",
+    "title_template": "{turniername} {disziplin} {kamera} Part {nummer}",
+    "description_template": "Aufnahme vom {datum} in {ort}. Disziplin: {disziplin}. Kamera: {kamera}.",
+    "playlist_id": "",
+    "playlist_create_new": true,
+    "playlist_new_title": ""
+  }
+}
