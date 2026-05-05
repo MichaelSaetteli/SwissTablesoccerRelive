@@ -112,6 +112,126 @@
     }[c]));
   }
 
+  // ----- Upload preview + upload trigger + status polling ---------------
+  async function loadUploadPreview(panel) {
+    const discipline = panel.dataset.discipline;
+    const list = panel.querySelector('[data-field="upload_preview"]');
+    const quotaEl = panel.querySelector('[data-field="quota_hint"]');
+    if (!list) return;
+    try {
+      const res = await fetch(`/api/upload-preview/${discipline}`, {
+        credentials: "same-origin",
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.files || data.files.length === 0) {
+        list.innerHTML = '<li class="empty">Noch keine Videos vorhanden.</li>';
+      } else {
+        list.innerHTML = data.files
+          .map((f) => {
+            const title = escapeHtml(f.title || "(kein Titel)");
+            const file = escapeHtml(f.file);
+            return `<li><strong>${title}</strong>` +
+                   `<br><span class="size">${file}</span></li>`;
+          })
+          .join("");
+      }
+      if (quotaEl) {
+        if (data.quota_hint) {
+          quotaEl.textContent = data.quota_hint;
+          quotaEl.hidden = false;
+        } else {
+          quotaEl.hidden = true;
+        }
+      }
+    } catch (e) {
+      console.warn("preview failed", e);
+    }
+  }
+
+  async function pollUploadStatus(panel) {
+    const discipline = panel.dataset.discipline;
+    try {
+      const res = await fetch(`/api/upload-status/${discipline}`, {
+        credentials: "same-origin",
+      });
+      if (!res.ok) return;
+      const status = await res.json();
+      renderUploadStatus(panel, status);
+    } catch (e) {
+      console.warn("upload poll failed", e);
+    }
+  }
+
+  function renderUploadStatus(panel, s) {
+    const set = (field, val) => {
+      const el = panel.querySelector(`[data-field="${field}"]`);
+      if (el) el.textContent = val == null ? "--" : val;
+    };
+    set("upload_state", s.state);
+    if (s.total_files > 0) {
+      set("upload_progress",
+        `${s.completed_files} / ${s.total_files}` +
+        (s.current_progress_percent
+          ? ` (${s.current_progress_percent.toFixed(1)}%)` : ""));
+    } else {
+      set("upload_progress", "--");
+    }
+    set("upload_current", s.current_file || "--");
+
+    const bar = panel.querySelector('[data-field="upload_bar"]');
+    if (bar) {
+      if (s.total_files > 0) {
+        const overall = (s.completed_files * 100 +
+                         (s.current_progress_percent || 0)) / s.total_files;
+        bar.value = Math.min(100, overall);
+      } else {
+        bar.value = 0;
+      }
+    }
+
+    const errEl = panel.querySelector('[data-field="upload_error"]');
+    if (errEl) {
+      if (s.error) {
+        errEl.textContent = `Fehler: ${s.error}`;
+        errEl.hidden = false;
+      } else {
+        errEl.hidden = true;
+      }
+    }
+
+    const log = panel.querySelector('[data-field="upload_log"]');
+    if (log) {
+      log.textContent = (s.log_tail || []).join("\n");
+      log.scrollTop = log.scrollHeight;
+    }
+  }
+
+  function bindUploadButtons() {
+    document.querySelectorAll('[data-action="upload-refresh"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const panel = btn.closest(".tabpanel");
+        loadUploadPreview(panel);
+      });
+    });
+    document.querySelectorAll('[data-action="upload"]').forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const panel = btn.closest(".tabpanel");
+        const discipline = panel.dataset.discipline;
+        btn.disabled = true;
+        try {
+          const res = await fetch(`/api/upload/${discipline}`, {
+            method: "POST",
+            credentials: "same-origin",
+          });
+          if (!res.ok) console.warn("upload failed", await res.text());
+        } finally {
+          setTimeout(() => { btn.disabled = false; }, 2000);
+        }
+      });
+    });
+  }
+
   // ----- Run button -------------------------------------------------------
   function bindRunButtons() {
     document.querySelectorAll('[data-action="run"]').forEach((btn) => {
@@ -271,6 +391,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     bindTabs();
     bindRunButtons();
+    bindUploadButtons();
     bindFilenameForms();
     bindYoutubeForms();
 
@@ -281,8 +402,11 @@
     panels.forEach((panel) => {
       loadFilenameConfig(panel);
       loadYoutubeConfig(panel);
+      loadUploadPreview(panel);
       pollStatus(panel);
+      pollUploadStatus(panel);
       setInterval(() => pollStatus(panel), POLL_MS);
+      setInterval(() => pollUploadStatus(panel), POLL_MS);
     });
   });
 })();

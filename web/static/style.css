@@ -177,6 +177,35 @@ legend { font-weight: 600; padding: 0 0.4rem; }
   color: var(--primary);
 }
 
+.quota-hint {
+  background: #fff3cd;
+  color: #6a4d00;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.upload-preview {
+  list-style: decimal inside;
+  padding: 0;
+  margin: 0 0 0.75rem;
+  background: #f0f3f8;
+  border-radius: 4px;
+  padding: 0.6rem 1rem;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.upload-preview li {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.upload-preview li:last-child { border-bottom: none; }
+
+progress[data-field] {
+  height: 1.2rem;
+  margin: 0.4rem 0;
+}
+
 .files { list-style: none; padding: 0; margin: 0 0 0.75rem; }
 .files li {
   display: flex;

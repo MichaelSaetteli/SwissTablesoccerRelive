@@ -127,11 +127,35 @@
           </form>
         </section>
 
-        <!-- 4. YouTube-Upload (Schritt 4) -->
+        <!-- 4. YouTube-Upload -->
         <section class="card youtube-upload-card">
           <h2>YouTube-Upload</h2>
-          <p class="hint">Wird in Schritt 4 implementiert.</p>
-          <button disabled>Upload starten</button>
+          <p class="hint">
+            Lade die fertigen Videos via YouTube Data API hoch. Die Vorschau
+            unten zeigt die generierten Titel - vor jedem Upload pruefen.
+          </p>
+          <p class="quota-hint" data-field="quota_hint" hidden></p>
+
+          <h3>Upload-Vorschau</h3>
+          <ol class="upload-preview" data-field="upload_preview">
+            <li class="empty">Noch keine Videos vorhanden.</li>
+          </ol>
+          <button data-action="upload-refresh" type="button">
+            Vorschau aktualisieren
+          </button>
+
+          <h3>Upload-Status</h3>
+          <p>Zustand: <strong data-field="upload_state">--</strong></p>
+          <p>Fortschritt: <span data-field="upload_progress">--</span></p>
+          <p>Aktuelle Datei: <span data-field="upload_current">--</span></p>
+          <progress data-field="upload_bar" max="100" value="0"
+                    style="width: 100%;"></progress>
+          <p class="error" data-field="upload_error" hidden></p>
+          <pre class="log" data-field="upload_log"></pre>
+
+          <button data-action="upload" {% if not d.enabled %}disabled{% endif %}>
+            Upload starten
+          </button>
         </section>
 
         <!-- 5. Download -->

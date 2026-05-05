@@ -407,3 +407,88 @@ def test_post_youtube_config_rejects_unknown_keys(app, client, doppel_config_pat
     saved = json.loads(doppel_config_path.read_text(encoding="utf-8"))
     assert "evil_key" not in saved["youtube"]
     assert saved["youtube"]["tournament_name"] == "OK"
+
+
+# ---------------------------------------------------------------------------
+# YouTube upload preview + trigger + status (Schritt 4)
+# ---------------------------------------------------------------------------
+
+def test_upload_preview_lists_titles(app, client) -> None:
+    _login(client)
+    cfg = app.config["PIPELINE_CONFIGS"]["Doppel"]
+    cfg.paths.output.mkdir(parents=True, exist_ok=True)
+    cfg.youtube["title_template"] = "{kamera} #{nummer}"
+    make_mp4(cfg.paths.output, "2026 STS2 T01 Seetal Doppel.mp4")
+    make_mp4(cfg.paths.output, "2026 STS2 T02 Seetal Doppel.mp4")
+
+    data = client.get("/api/upload-preview/Doppel").get_json()
+    titles = [f["title"] for f in data["files"]]
+    assert titles == ["T01 #1", "T02 #2"]
+    assert data["total"] == 2
+    assert "Units" in data["quota_hint"]
+
+
+def test_upload_preview_empty_output(app, client) -> None:
+    _login(client)
+    cfg = app.config["PIPELINE_CONFIGS"]["Doppel"]
+    cfg.paths.output.mkdir(parents=True, exist_ok=True)
+    data = client.get("/api/upload-preview/Doppel").get_json()
+    assert data["files"] == []
+    assert data["quota_hint"] == ""
+
+
+def test_upload_status_starts_idle(client) -> None:
+    _login(client)
+    data = client.get("/api/upload-status/Doppel").get_json()
+    assert data["state"] == "idle"
+    assert data["total_files"] == 0
+
+
+def test_upload_endpoint_uses_injected_runner(app_factory, doppel_config_path: Path) -> None:
+    """POST /api/upload/<discipline> must use injected runner (no real Google)."""
+    captured: List[Dict[str, object]] = []
+
+    def fake_factory(config):
+        return {"fake": "service"}
+
+    def fake_runner(service, config, writer):
+        captured.append({"service": service, "discipline": config.discipline})
+        writer.update(state="done", total_files=2, completed_files=2)
+        writer.append_log("fake-upload-done")
+        return None
+
+    app = app_factory()
+    app.config["YOUTUBE_SERVICE_FACTORY"] = fake_factory
+    app.config["YOUTUBE_UPLOAD_RUNNER"] = fake_runner
+    client = app.test_client()
+    _login(client)
+
+    res = client.post("/api/upload/Doppel")
+    assert res.status_code == 202
+
+    # Wait until the background thread persists its state change.
+    import time
+    status: Dict[str, object] = {}
+    for _ in range(40):
+        status = client.get("/api/upload-status/Doppel").get_json()
+        if status["state"] != "idle":
+            break
+        time.sleep(0.05)
+    assert captured and captured[0]["discipline"] == "Doppel"
+    assert status["state"] == "done"
+
+
+def test_upload_endpoint_disabled_discipline_returns_409(
+    app_factory,
+) -> None:
+    app = app_factory()
+    app.config["PIPELINE_CONFIGS"]["Doppel"].enabled = False
+    client = app.test_client()
+    _login(client)
+    res = client.post("/api/upload/Doppel")
+    assert res.status_code == 409
+
+
+def test_upload_endpoint_unknown_discipline_returns_404(client) -> None:
+    _login(client)
+    assert client.post("/api/upload/Mixed").status_code == 404

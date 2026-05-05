@@ -171,6 +171,46 @@ def api_filename_config(discipline: str):
     return jsonify(services.get_filename_config(config))
 
 
+@api_bp.route("/upload-status/<discipline>")
+@login_required
+def api_upload_status(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    status = services.get_upload_status(config)
+    return jsonify(status.to_dict())
+
+
+@api_bp.route("/upload-preview/<discipline>")
+@login_required
+def api_upload_preview(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    return jsonify(services.get_upload_preview(config))
+
+
+@api_bp.route("/upload/<discipline>", methods=["POST"])
+@login_required
+def api_upload(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    if not config.enabled:
+        return jsonify({"error": "discipline disabled in config"}), 409
+
+    factory = current_app.config.get("YOUTUBE_SERVICE_FACTORY")
+    runner = current_app.config.get("YOUTUBE_UPLOAD_RUNNER")
+    kwargs = {}
+    if factory is not None:
+        kwargs["service_factory"] = factory
+    if runner is not None:
+        kwargs["upload_runner"] = runner
+
+    services.start_upload_async(config, **kwargs)
+    return jsonify({"status": "scheduled", "discipline": discipline}), 202
+
+
 @api_bp.route("/youtube-config/<discipline>", methods=["GET", "POST"])
 @login_required
 def api_youtube_config(discipline: str):
@@ -236,6 +276,8 @@ def create_app(
     username: Optional[str] = None,
     password: Optional[str] = None,
     runner: services.Runner = None,  # type: ignore[assignment]
+    youtube_service_factory: Optional[services.ServiceFactory] = None,
+    youtube_upload_runner: Optional[services.UploadRunner] = None,
 ) -> Flask:
     """Build a configured Flask app.
 
@@ -279,6 +321,8 @@ def create_app(
         from watcher.pipeline_runner import run_pipeline as _real_runner
         runner = _real_runner
     app.config["PIPELINE_RUNNER"] = runner
+    app.config["YOUTUBE_SERVICE_FACTORY"] = youtube_service_factory
+    app.config["YOUTUBE_UPLOAD_RUNNER"] = youtube_upload_runner
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(ui_bp)

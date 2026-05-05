@@ -25,6 +25,17 @@ from watcher.status import (
     read_status,
     status_path_for,
 )
+from youtube.metadata_builder import (
+    VideoMetadata,
+    build_upload_batch,
+    quota_hint,
+)
+from youtube.upload_status import (
+    UploadStatus,
+    UploadStatusWriter,
+    read_upload_status,
+    upload_status_path_for,
+)
 
 
 Runner = Callable[[PipelineConfig], StatusWriter]
@@ -184,3 +195,92 @@ def update_youtube_config(
     config.youtube.update(cleaned)
     save_config(config)
     return get_youtube_config(config)
+
+
+# ---------------------------------------------------------------------------
+# YouTube upload (preview + run)
+# ---------------------------------------------------------------------------
+
+# Type aliases for injection points (tests pass fakes here).
+ServiceFactory = Callable[[PipelineConfig], object]
+UploadRunner = Callable[[object, PipelineConfig, UploadStatusWriter], object]
+
+
+def get_upload_preview(config: PipelineConfig) -> Dict[str, object]:
+    """Return a JSON-serialisable preview of titles + descriptions.
+
+    The Web-Interface shows this list before the operator commits to an
+    upload so they can sanity-check the generated metadata.
+    """
+    files = list_output_files(config)
+    file_names = [str(entry["name"]) for entry in files]
+    metadata: List[VideoMetadata] = build_upload_batch(config, file_names)
+    return {
+        "files": [m.to_dict() for m in metadata],
+        "quota_hint": quota_hint(len(file_names)),
+        "total": len(file_names),
+    }
+
+
+def get_upload_status(config: PipelineConfig) -> UploadStatus:
+    existing = read_upload_status(upload_status_path_for(config))
+    return existing or UploadStatus(discipline=config.discipline)
+
+
+def _default_service_factory(config: PipelineConfig) -> object:
+    """Build a real Google YouTube service from the saved token."""
+    from youtube.oauth_setup import build_youtube_service, load_credentials
+
+    if config.source_path is None:
+        raise RuntimeError("config.source_path is None - cannot locate token")
+    token_path = config.source_path.parent / "youtube_token.json"
+    creds = load_credentials(token_path)
+    if creds is None:
+        raise RuntimeError(
+            f"No valid YouTube credentials at {token_path}. Run "
+            f"'python -m youtube.oauth_setup <client_secrets.json> {token_path}' "
+            f"on a machine with a browser, then copy the token to the NAS."
+        )
+    return build_youtube_service(creds)
+
+
+def _default_upload_runner(
+    service: object,
+    config: PipelineConfig,
+    writer: UploadStatusWriter,
+) -> object:
+    from youtube.youtube_uploader import upload_batch
+
+    return upload_batch(service, config, writer=writer)
+
+
+def start_upload_async(
+    config: PipelineConfig,
+    *,
+    service_factory: ServiceFactory = _default_service_factory,
+    upload_runner: UploadRunner = _default_upload_runner,
+) -> threading.Thread:
+    """Spawn a daemon thread that uploads every output file to YouTube.
+
+    *service_factory* and *upload_runner* are injection points so tests
+    can run the full Web flow without hitting Google.
+    """
+    writer = UploadStatusWriter(
+        upload_status_path_for(config), config.discipline,
+    )
+
+    def _target() -> None:
+        try:
+            service = service_factory(config)
+            upload_runner(service, config, writer)
+        except Exception as exc:
+            writer.fail(f"{type(exc).__name__}: {exc}")
+            writer.append_log(f"Upload aborted: {exc}")
+
+    thread = threading.Thread(
+        target=_target,
+        name=f"upload-{config.discipline}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
