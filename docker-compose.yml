@@ -1,0 +1,46 @@
+# Synology DS1522+ deployment.
+#
+# Volume layout (briefing s.2):
+#   /volume1/video-pipeline/  on the host  ->  /data/  inside the container
+#   Configs live at /data/config_doppel.json and /data/config_einzel.json.
+#   Eingang/work/output/logs subdirs sit alongside.
+#
+# Before `docker compose up -d`:
+#   * copy/edit config_doppel.json + config_einzel.json into
+#     /volume1/video-pipeline/ (paths inside MUST start with /data/)
+#   * set WEB_PASSWORD and WEB_SECRET_KEY in this file (or in an .env)
+#   * (later) drop youtube_token.json next to the configs
+
+services:
+  video-pipeline:
+    build: .
+    image: video-pipeline:latest
+    container_name: video-pipeline
+    restart: unless-stopped
+    init: true
+    ports:
+      - "5000:5000"
+    volumes:
+      - /volume1/video-pipeline:/data
+    environment:
+      TZ: Europe/Zurich
+      # ---- web auth ----
+      WEB_USERNAME: admin
+      # IMPORTANT: change before deployment. Sessions are signed with
+      # WEB_SECRET_KEY - rotating it logs everyone out.
+      WEB_PASSWORD: changeme
+      WEB_SECRET_KEY: please-set-me
+      # ---- runtime ----
+      VIDEO_PIPELINE_DATA_DIR: /data
+      # Set to "0" to run the web UI without auto-triggering pipelines.
+      ENABLE_WATCHER: "1"
+    # Liveness check - the /login page is unauthenticated and cheap.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request, sys; \
+            sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/login', timeout=3).status==200 else 1)\""
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

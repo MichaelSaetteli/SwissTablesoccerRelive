@@ -2,10 +2,10 @@
   "discipline": "Einzel",
   "enabled": true,
   "paths": {
-    "eingang": "/volume1/video-pipeline/eingang_einzel",
-    "work": "/volume1/video-pipeline/work_einzel",
-    "output": "/volume1/video-pipeline/output_einzel",
-    "logs": "/volume1/video-pipeline/logs"
+    "eingang": "/data/eingang_einzel",
+    "work": "/data/work_einzel",
+    "output": "/data/output_einzel",
+    "logs": "/data/logs"
   },
   "filename_constants": {
     "jahr": "2026",

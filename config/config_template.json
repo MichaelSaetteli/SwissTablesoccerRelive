@@ -3,14 +3,14 @@
   "discipline": "Doppel",
   "enabled": true,
   "paths": {
-    "_comment": "Absolute Pfade auf dem NAS-Volume. Auf dem DS1522+ liegen alle unter /volume1/video-pipeline/.",
-    "eingang": "/volume1/video-pipeline/eingang_doppel",
-    "work": "/volume1/video-pipeline/work_doppel",
-    "output": "/volume1/video-pipeline/output_doppel",
-    "logs": "/volume1/video-pipeline/logs"
+    "_comment": "Pfade aus Sicht des Containers. /volume1/video-pipeline auf dem NAS wird in /data im Container gemounted (siehe docker-compose.yml).",
+    "eingang": "/data/eingang_doppel",
+    "work": "/data/work_doppel",
+    "output": "/data/output_doppel",
+    "logs": "/data/logs"
   },
   "filename_constants": {
-    "_comment": "Schema: {jahr} {sts_nummer} {tischnummer} {turniername} {disziplin} [{part}].mp4. tischnummer wird aus dem Ordnernamen abgeleitet (ET01 -> T01). Leere Felder werden im Dateinamen weggelassen.",
+    "_comment": "Schema: {jahr} {sts_nummer} {tischnummer} {turniername} {disziplin} [{part}].mp4. tischnummer wird aus dem Ordnernamen abgeleitet (ET01 -> T01). Bei Splits (>24 MP4s) wird part automatisch durch 'Part 1', 'Part 2' ... ersetzt.",
     "jahr": "2026",
     "sts_nummer": "STS2",
     "turniername": "Seetal",
@@ -22,7 +22,7 @@
     "max_files_per_folder": 24
   },
   "youtube": {
-    "_comment": "Wird in Schritt 4 voll genutzt. Hier nur Platzhalter.",
+    "_comment": "Wird vom YouTube-Modul (Schritt 4) verwendet. Platzhalter im Titel: {turniername} {disziplin} {datum} {ort} {kamera} {nummer}.",
     "tournament_name": "",
     "date": "",
     "location": "",

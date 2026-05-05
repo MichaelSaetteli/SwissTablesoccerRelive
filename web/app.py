@@ -343,12 +343,25 @@ def create_app(
 # CLI launcher
 # ---------------------------------------------------------------------------
 
-def _load_default_configs(repo_root: Path) -> Dict[str, PipelineConfig]:
-    """Load both configs from the repo's config/ directory if present."""
+def _resolve_data_dir() -> Path:
+    """Resolve the directory that holds ``config_<discipline>.json``.
+
+    Order of precedence:
+      1. ``$VIDEO_PIPELINE_DATA_DIR`` (set in Docker via the compose file)
+      2. ``<repo>/config`` for local development checkouts
+    """
+    env_value = os.environ.get("VIDEO_PIPELINE_DATA_DIR")
+    if env_value:
+        return Path(env_value)
+    return Path(__file__).resolve().parents[1] / "config"
+
+
+def _load_configs_from(data_dir: Path) -> Dict[str, PipelineConfig]:
+    """Load Doppel + Einzel configs from *data_dir* if present."""
     out: Dict[str, PipelineConfig] = {}
     candidates = (
-        ("Doppel", repo_root / "config" / "config_doppel.json"),
-        ("Einzel", repo_root / "config" / "config_einzel.json"),
+        ("Doppel", data_dir / "config_doppel.json"),
+        ("Einzel", data_dir / "config_einzel.json"),
     )
     for name, path in candidates:
         if path.is_file():
@@ -356,16 +369,68 @@ def _load_default_configs(repo_root: Path) -> Dict[str, PipelineConfig]:
     return out
 
 
+def _start_watchers(configs: Dict[str, PipelineConfig]) -> List[object]:
+    """Spawn one FolderWatcher per enabled discipline.
+
+    Returns the list of started watchers so the caller can ``stop()`` them
+    on shutdown.
+    """
+    from watcher.folder_watcher import FolderWatcher
+
+    watchers: List[FolderWatcher] = []
+    for name, cfg in configs.items():
+        if not cfg.enabled:
+            print(f"[watcher] {name}: disabled in config, skipping",
+                  file=sys.stderr)
+            continue
+        watcher = FolderWatcher(cfg)
+        watcher.start()
+        watchers.append(watcher)
+        print(f"[watcher] {name}: started on {cfg.paths.eingang}",
+              file=sys.stderr)
+    return watchers
+
+
+def _serve(app: Flask, host: str, port: int) -> None:
+    """Production-grade WSGI server. Falls back to Flask's dev server if
+    waitress is not importable (only happens in bare local dev)."""
+    try:
+        from waitress import serve as waitress_serve
+    except ImportError:
+        print("[web] waitress not installed - using Flask dev server",
+              file=sys.stderr)
+        app.run(host=host, port=port)
+        return
+    print(f"[web] waitress serving on http://{host}:{port}",
+          file=sys.stderr)
+    waitress_serve(app, host=host, port=port)
+
+
 def _main(argv: List[str]) -> int:
-    repo_root = Path(__file__).resolve().parents[1]
-    configs = _load_default_configs(repo_root)
+    data_dir = _resolve_data_dir()
+    configs = _load_configs_from(data_dir)
     if not configs:
-        print("No config files found in config/", file=sys.stderr)
+        print(f"No config files found in {data_dir}", file=sys.stderr)
+        print("  expected: config_doppel.json and/or config_einzel.json",
+              file=sys.stderr)
         return 1
+
+    watchers: List[object] = []
+    if os.environ.get("ENABLE_WATCHER", "1") != "0":
+        watchers = _start_watchers(configs)
+
     app = create_app(configs)
     host = os.environ.get("WEB_HOST", "0.0.0.0")
     port = int(os.environ.get("WEB_PORT", "5000"))
-    app.run(host=host, port=port)
+
+    try:
+        _serve(app, host, port)
+    finally:
+        for watcher in watchers:
+            try:
+                watcher.stop()
+            except Exception:  # pragma: no cover - best-effort shutdown
+                pass
     return 0
 
 

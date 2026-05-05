@@ -2,10 +2,10 @@
   "discipline": "Doppel",
   "enabled": true,
   "paths": {
-    "eingang": "/volume1/video-pipeline/eingang_doppel",
-    "work": "/volume1/video-pipeline/work_doppel",
-    "output": "/volume1/video-pipeline/output_doppel",
-    "logs": "/volume1/video-pipeline/logs"
+    "eingang": "/data/eingang_doppel",
+    "work": "/data/work_doppel",
+    "output": "/data/output_doppel",
+    "logs": "/data/logs"
   },
   "filename_constants": {
     "jahr": "2026",

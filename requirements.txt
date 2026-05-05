@@ -1,5 +1,6 @@
 watchdog>=4.0
 flask>=3.0
+waitress>=3.0
 google-api-python-client>=2.130
 google-auth-oauthlib>=1.2
 google-auth-httplib2>=0.2
