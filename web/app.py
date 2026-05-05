@@ -102,6 +102,12 @@ def logout():
 # UI route
 # ---------------------------------------------------------------------------
 
+@ui_bp.route("/favicon.ico")
+def favicon():
+    """Silence the browser's auto-request for /favicon.ico (no asset shipped)."""
+    return ("", 204)
+
+
 @ui_bp.route("/")
 @login_required
 def index():

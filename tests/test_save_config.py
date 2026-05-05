@@ -36,3 +36,10 @@ def test_save_config_preserves_path_strings(doppel_config_path: Path) -> None:
     # Path values must be strings (not POSIX path repr objects).
     for key, value in raw["paths"].items():
         assert isinstance(value, str), key
+
+
+def test_save_config_ends_with_newline(doppel_config_path: Path) -> None:
+    """Trailing newline keeps the file POSIX-compliant and git-diff-friendly."""
+    cfg = load_config(doppel_config_path)
+    save_config(cfg)
+    assert doppel_config_path.read_text(encoding="utf-8").endswith("\n")

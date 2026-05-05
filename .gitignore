@@ -41,3 +41,5 @@ Thumbs.db
 /output_doppel/
 /output_einzel/
 /logs/
+config/status_*.json
+status_*.json
