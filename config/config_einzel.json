@@ -19,13 +19,13 @@
     "max_files_per_folder": 24
   },
   "youtube": {
-    "tournament_name": "",
-    "date": "",
-    "location": "",
+    "tournament_name": "STS Browser-Test 2026",
+    "date": "17. Mai 2026",
+    "location": "Bern",
     "title_template": "{turniername} {disziplin} {kamera} Part {nummer}",
     "description_template": "Aufnahme vom {datum} in {ort}. Disziplin: {disziplin}. Kamera: {kamera}.",
     "playlist_id": "",
     "playlist_create_new": true,
-    "playlist_new_title": ""
+    "playlist_new_title": "STS Einzel 2026"
   }
 }
