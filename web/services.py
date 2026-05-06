@@ -249,9 +249,17 @@ def _default_upload_runner(
     config: PipelineConfig,
     writer: UploadStatusWriter,
 ) -> object:
-    from youtube.youtube_uploader import upload_batch
+    from youtube.youtube_uploader import UploadError, upload_batch
 
-    return upload_batch(service, config, writer=writer)
+    try:
+        return upload_batch(service, config, writer=writer)
+    except UploadError as exc:
+        # "Already running" is reported via the status file by upload_batch
+        # itself - swallow here so the daemon thread exits cleanly without
+        # an unhandled stack trace in the logs.
+        if "already running" in str(exc):
+            return None
+        raise
 
 
 def start_upload_async(

@@ -139,11 +139,14 @@ def run_pipeline(config: PipelineConfig) -> StatusWriter:
         failed = [r for r in results if not r.success]
         succeeded = [r for r in results if r.success]
         for r in succeeded:
-            writer.append_log(f"OK     {r.folder.name} -> {r.output.name}")
-        for r in failed:
+            log_hint = f" [log: {r.log_path.name}]" if r.log_path else ""
             writer.append_log(
-                f"FAIL   {r.folder.name} rc={r.returncode} "
-                f"stderr={r.stderr.strip()[:200]}"
+                f"OK     {r.folder.name} -> {r.output.name}{log_hint}"
+            )
+        for r in failed:
+            log_hint = f" [log: {r.log_path}]" if r.log_path else ""
+            writer.append_log(
+                f"FAIL   {r.folder.name} rc={r.returncode}{log_hint}"
             )
 
         if failed:

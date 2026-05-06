@@ -1,90 +1,62 @@
-"""Tests for watcher.folder_watcher.
+"""Tests for watcher.folder_watcher (event-driven rev).
 
-We do not spin up watchdog observers here; instead we drive the
-``QuiescenceDetector`` and ``FolderWatcher.check_and_trigger`` directly
-with a fake clock and a stub runner.
+We never spin up a real watchdog observer here. The two seams under
+test are:
+
+  * ``check_and_trigger`` - the public method that decides whether to
+    invoke the runner, given the current eingang contents.
+  * ``_on_event`` - the watchdog event hook, exercised through a
+    ``FakeTimer`` so we can verify scheduling/rescheduling without
+    actually waiting for ``quiet_seconds`` to pass.
 """
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
-from typing import List
+from typing import Callable, List
 
 from pipeline.config_loader import load_config
 from tests.conftest import make_mp4
-from watcher.folder_watcher import FolderWatcher, QuiescenceDetector
-from watcher.status import State, StatusWriter, status_path_for
+from watcher.folder_watcher import FolderWatcher
+from watcher.status import StatusWriter, status_path_for
 
 
 # ---------------------------------------------------------------------------
-# Fake clock
+# Fakes
 # ---------------------------------------------------------------------------
 
-class FakeClock:
-    def __init__(self, start: float = 0.0) -> None:
-        self.now = start
+class FakeTimer:
+    """Drop-in for ``threading.Timer`` that does not actually wait.
 
-    def __call__(self) -> float:
-        return self.now
+    Tests call ``fire()`` to simulate the timer expiring, so the assert
+    can run synchronously without sleeping ``quiet_seconds``.
+    """
 
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
+    instances: List["FakeTimer"] = []
 
+    def __init__(self, seconds: float, fn: Callable[[], None]) -> None:
+        self.seconds = seconds
+        self.fn = fn
+        self.cancelled = False
+        self.started = False
+        self.daemon = True
+        FakeTimer.instances.append(self)
 
-# ---------------------------------------------------------------------------
-# QuiescenceDetector
-# ---------------------------------------------------------------------------
+    def start(self) -> None:
+        self.started = True
 
-def test_quiescence_starts_not_quiet() -> None:
-    clock = FakeClock()
-    det = QuiescenceDetector(quiet_seconds=10.0, clock=clock)
-    assert det.is_quiet() is False
-    assert det.has_event is False
+    def cancel(self) -> None:
+        self.cancelled = True
 
-
-def test_quiescence_detects_after_window() -> None:
-    clock = FakeClock()
-    det = QuiescenceDetector(quiet_seconds=10.0, clock=clock)
-
-    det.bump()
-    assert det.has_event is True
-    assert det.is_quiet() is False  # no time passed yet
-
-    clock.advance(5.0)
-    assert det.is_quiet() is False
-
-    clock.advance(5.0)  # total 10s
-    assert det.is_quiet() is True
+    def fire(self) -> None:
+        if not self.cancelled:
+            self.fn()
 
 
-def test_quiescence_resets_on_new_event() -> None:
-    clock = FakeClock()
-    det = QuiescenceDetector(quiet_seconds=10.0, clock=clock)
+def _fake_factory(seconds: float, fn: Callable[[], None]) -> FakeTimer:
+    return FakeTimer(seconds, fn)
 
-    det.bump()
-    clock.advance(8.0)
-    det.bump()  # restart the timer
-    clock.advance(5.0)
-    assert det.is_quiet() is False  # only 5s since last event
-
-    clock.advance(5.0)
-    assert det.is_quiet() is True
-
-
-def test_quiescence_reset_clears_event() -> None:
-    clock = FakeClock()
-    det = QuiescenceDetector(quiet_seconds=10.0, clock=clock)
-    det.bump()
-    clock.advance(20.0)
-    assert det.is_quiet() is True
-    det.reset()
-    assert det.has_event is False
-    assert det.is_quiet() is False
-
-
-# ---------------------------------------------------------------------------
-# FolderWatcher.check_and_trigger (no real watchdog/observer)
-# ---------------------------------------------------------------------------
 
 class StubRunner:
     """Records every call. Mimics pipeline_runner.run_pipeline signature."""
@@ -100,84 +72,129 @@ class StubRunner:
         return StatusWriter(status_path_for(config), config.discipline)
 
 
-def _build_watcher(config_path: Path, *, quiet: float, runner: StubRunner) -> tuple:
+def _build_watcher(config_path: Path, *, runner: StubRunner) -> tuple:
     cfg = load_config(config_path)
-    clock = FakeClock()
+    FakeTimer.instances = []
     watcher = FolderWatcher(
-        cfg, quiet_seconds=quiet, poll_interval=0.01,
-        runner=runner, clock=clock,
+        cfg,
+        quiet_seconds=10.0,
+        runner=runner,
+        timer_factory=_fake_factory,
     )
-    return watcher, clock, cfg
+    return watcher, cfg
 
 
-def test_check_and_trigger_skips_when_no_events(doppel_config_path: Path) -> None:
-    runner = StubRunner()
-    watcher, clock, cfg = _build_watcher(doppel_config_path, quiet=10.0, runner=runner)
-
-    cfg.paths.eingang.mkdir(parents=True)
-    (cfg.paths.eingang / "ET03").mkdir()  # folder exists but no event
-
-    fired = watcher.check_and_trigger()
-    assert fired is False
-    assert runner.calls == []
-
-
-def test_check_and_trigger_fires_after_quiet_window(
-    doppel_config_path: Path,
-) -> None:
-    runner = StubRunner()
-    watcher, clock, cfg = _build_watcher(doppel_config_path, quiet=10.0, runner=runner)
-
-    cfg.paths.eingang.mkdir(parents=True)
-    (cfg.paths.eingang / "ET03").mkdir()
-    make_mp4(cfg.paths.eingang / "ET03", "video.mp4")
-
-    watcher._detector.bump()
-    clock.advance(5.0)
-    assert watcher.check_and_trigger() is False  # not quiet yet
-    assert runner.calls == []
-
-    clock.advance(5.0)  # total 10s
-    assert watcher.check_and_trigger() is True
-    assert runner.calls == ["Doppel"]
-
+# ---------------------------------------------------------------------------
+# check_and_trigger
+# ---------------------------------------------------------------------------
 
 def test_check_and_trigger_skips_when_eingang_empty(
     doppel_config_path: Path,
 ) -> None:
-    """Quiet but no folders -> no run, detector reset to avoid infinite loop."""
     runner = StubRunner()
-    watcher, clock, cfg = _build_watcher(doppel_config_path, quiet=5.0, runner=runner)
-
-    cfg.paths.eingang.mkdir(parents=True)  # empty
-    watcher._detector.bump()
-    clock.advance(10.0)
+    watcher, cfg = _build_watcher(doppel_config_path, runner=runner)
+    cfg.paths.eingang.mkdir(parents=True)
 
     assert watcher.check_and_trigger() is False
     assert runner.calls == []
-    # Detector must have been reset so we don't keep firing
-    assert watcher._detector.has_event is False
 
 
-def test_check_and_trigger_swallows_run_error(
+def test_check_and_trigger_fires_when_folders_present(
     doppel_config_path: Path,
 ) -> None:
-    """A pipeline run error must not crash the watcher loop."""
+    runner = StubRunner()
+    watcher, cfg = _build_watcher(doppel_config_path, runner=runner)
+    cfg.paths.eingang.mkdir(parents=True)
+    (cfg.paths.eingang / "ET03").mkdir()
+    make_mp4(cfg.paths.eingang / "ET03", "video.mp4")
+
+    assert watcher.check_and_trigger() is True
+    assert runner.calls == ["Doppel"]
+
+
+def test_check_and_trigger_swallows_run_error(doppel_config_path: Path) -> None:
+    """Run errors must not crash the watcher loop."""
     from watcher.pipeline_runner import PipelineRunError
 
     runner = StubRunner(raise_exc=PipelineRunError("already running"))
-    watcher, clock, cfg = _build_watcher(doppel_config_path, quiet=5.0, runner=runner)
-
+    watcher, cfg = _build_watcher(doppel_config_path, runner=runner)
     cfg.paths.eingang.mkdir(parents=True)
     (cfg.paths.eingang / "ET03").mkdir()
     make_mp4(cfg.paths.eingang / "ET03", "v.mp4")
 
-    watcher._detector.bump()
-    clock.advance(10.0)
-
     fired = watcher.check_and_trigger()
-    assert fired is False  # raised + swallowed -> not a successful trigger
+    assert fired is False  # raised + swallowed
     assert runner.calls == ["Doppel"]
-    # Status file gets a "Run skipped" log entry
-    s = watcher._writer.status
-    assert any("skipped" in line.lower() for line in s.log_tail)
+    assert any("skipped" in line.lower() for line in watcher._writer.status.log_tail)
+
+
+# ---------------------------------------------------------------------------
+# _on_event scheduling
+# ---------------------------------------------------------------------------
+
+def test_on_event_schedules_timer(doppel_config_path: Path) -> None:
+    runner = StubRunner()
+    watcher, cfg = _build_watcher(doppel_config_path, runner=runner)
+    cfg.paths.eingang.mkdir(parents=True)
+
+    watcher._on_event()
+    timers = FakeTimer.instances
+    assert len(timers) == 1
+    assert timers[0].seconds == 10.0
+    assert timers[0].started is True
+    assert timers[0].cancelled is False
+
+
+def test_on_event_cancels_pending_timer_and_reschedules(
+    doppel_config_path: Path,
+) -> None:
+    """A second event must cancel the in-flight timer and start a new one."""
+    runner = StubRunner()
+    watcher, cfg = _build_watcher(doppel_config_path, runner=runner)
+    cfg.paths.eingang.mkdir(parents=True)
+
+    watcher._on_event()
+    watcher._on_event()
+    watcher._on_event()
+
+    assert len(FakeTimer.instances) == 3
+    # The first two were cancelled, the third is the live one.
+    assert FakeTimer.instances[0].cancelled is True
+    assert FakeTimer.instances[1].cancelled is True
+    assert FakeTimer.instances[2].cancelled is False
+
+
+def test_timer_fire_triggers_pipeline(doppel_config_path: Path) -> None:
+    """When the timer expires it must (eventually) invoke the runner."""
+    runner = StubRunner()
+    watcher, cfg = _build_watcher(doppel_config_path, runner=runner)
+    cfg.paths.eingang.mkdir(parents=True)
+    (cfg.paths.eingang / "ET03").mkdir()
+    make_mp4(cfg.paths.eingang / "ET03", "v.mp4")
+
+    watcher._on_event()
+    # FakeTimer.fire() calls _fire_deferred_check, which spawns a daemon
+    # thread. Wait briefly for it to complete.
+    FakeTimer.instances[-1].fire()
+    for _ in range(40):
+        if runner.calls:
+            break
+        threading.Event().wait(0.05)
+    assert runner.calls == ["Doppel"]
+
+
+def test_stop_cancels_pending_timer(doppel_config_path: Path) -> None:
+    runner = StubRunner()
+    watcher, cfg = _build_watcher(doppel_config_path, runner=runner)
+    cfg.paths.eingang.mkdir(parents=True)
+
+    watcher._on_event()
+    pending = FakeTimer.instances[-1]
+    assert pending.cancelled is False
+
+    # stop() with no observer set is fine (we never started watchdog).
+    watcher.stop()
+    assert pending.cancelled is True
+    # Subsequent events are ignored.
+    watcher._on_event()
+    assert len(FakeTimer.instances) == 1

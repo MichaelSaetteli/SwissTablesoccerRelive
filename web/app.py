@@ -127,23 +127,22 @@ def index():
 # API routes (all login-protected)
 # ---------------------------------------------------------------------------
 
-@api_bp.route("/status/<discipline>")
+@api_bp.route("/state/<discipline>")
 @login_required
-def api_status(discipline: str):
+def api_state(discipline: str):
+    """Combined snapshot for the front-end's single poll loop.
+
+    Returns ``{pipeline, upload, files}`` so the JS only needs one
+    request per tab per cycle (was two before).
+    """
     config = _get_config_or_404(discipline)
     if config is None:
         return jsonify({"error": "unknown discipline"}), 404
-    status = services.get_status(config)
-    return jsonify(status.to_dict())
-
-
-@api_bp.route("/files/<discipline>")
-@login_required
-def api_files(discipline: str):
-    config = _get_config_or_404(discipline)
-    if config is None:
-        return jsonify({"error": "unknown discipline"}), 404
-    return jsonify({"files": services.list_output_files(config)})
+    return jsonify({
+        "pipeline": services.get_status(config).to_dict(),
+        "upload": services.get_upload_status(config).to_dict(),
+        "files": services.list_output_files(config),
+    })
 
 
 @api_bp.route("/run/<discipline>", methods=["POST"])
@@ -169,16 +168,6 @@ def api_filename_config(discipline: str):
         updated = services.update_filename_config(config, payload)
         return jsonify(updated)
     return jsonify(services.get_filename_config(config))
-
-
-@api_bp.route("/upload-status/<discipline>")
-@login_required
-def api_upload_status(discipline: str):
-    config = _get_config_or_404(discipline)
-    if config is None:
-        return jsonify({"error": "unknown discipline"}), 404
-    status = services.get_upload_status(config)
-    return jsonify(status.to_dict())
 
 
 @api_bp.route("/upload-preview/<discipline>")

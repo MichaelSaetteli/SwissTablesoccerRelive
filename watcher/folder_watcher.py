@@ -1,18 +1,20 @@
-"""Watchdog-based folder watcher with quiescence detection.
+"""Watchdog-based folder watcher with event-driven quiescence detection.
 
-Detection algorithm:
+Algorithm (rev 2 - was a 1-Hz polling loop, is now timer-driven):
 
   1. Watchdog reports any file/dir create/modify/move event under
-     ``config.paths.eingang`` -> ``QuiescenceDetector.bump()``.
-  2. A polling thread checks every ``poll_interval`` seconds whether the
-     eingang has been quiet for at least ``quiet_seconds`` AND contains
-     at least one folder. If so it triggers ``run_pipeline``.
-  3. While the pipeline is running, further events still bump the
-     detector but the trigger is suppressed because the per-discipline
-     run lock is held by ``pipeline_runner``.
+     ``config.paths.eingang`` -> ``_on_event`` cancels the pending
+     deferred check (if any) and schedules a fresh ``threading.Timer``
+     for ``quiet_seconds``.
+  2. When the timer fires, ``_fire_deferred_check`` runs in its own
+     daemon thread (so the timer thread does not block) and calls
+     ``check_and_trigger``.
+  3. ``check_and_trigger`` is also the public test seam: tests can
+     drive it directly without spinning up watchdog.
 
-The detector is intentionally a plain Python class with no watchdog
-dependency so it can be unit-tested with a fake clock.
+Compared to the previous polling-based design this watcher consumes
+zero CPU when no events arrive and reacts immediately when the eingang
+goes quiet - no up-to-1s polling latency.
 """
 
 from __future__ import annotations
@@ -20,8 +22,6 @@ from __future__ import annotations
 import logging
 import sys
 import threading
-import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -40,54 +40,15 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Quiescence detector (testable in isolation)
-# ---------------------------------------------------------------------------
-
-Clock = Callable[[], float]
-
-
-@dataclass
-class QuiescenceDetector:
-    """Tracks the time of the last event; ``is_quiet`` answers the trigger.
-
-    Parameters
-    ----------
-    quiet_seconds:
-        How long the eingang must be silent before we consider the upload
-        complete. Briefing recommends "X seconds" - default 10.
-    clock:
-        Time source. Tests inject a fake.
-    """
-    quiet_seconds: float = 10.0
-    clock: Clock = time.monotonic
-    _last_event: Optional[float] = None
-
-    def bump(self) -> None:
-        self._last_event = self.clock()
-
-    def reset(self) -> None:
-        self._last_event = None
-
-    @property
-    def has_event(self) -> bool:
-        return self._last_event is not None
-
-    def is_quiet(self) -> bool:
-        if self._last_event is None:
-            return False
-        return (self.clock() - self._last_event) >= self.quiet_seconds
-
-
-# ---------------------------------------------------------------------------
 # Watchdog handler (only imported here to keep test module import-light)
 # ---------------------------------------------------------------------------
 
-def _build_handler(detector: QuiescenceDetector):
+def _build_handler(on_event: Callable[[], None]):
     from watchdog.events import FileSystemEventHandler  # local import
 
     class EingangHandler(FileSystemEventHandler):
         def on_any_event(self, event):  # noqa: D401 - watchdog API
-            detector.bump()
+            on_event()
 
     return EingangHandler()
 
@@ -96,6 +57,15 @@ def _build_handler(detector: QuiescenceDetector):
 # Watcher
 # ---------------------------------------------------------------------------
 
+TimerFactory = Callable[[float, Callable[[], None]], "threading.Timer"]
+
+
+def _default_timer_factory(seconds: float, fn: Callable[[], None]) -> threading.Timer:
+    timer = threading.Timer(seconds, fn)
+    timer.daemon = True
+    return timer
+
+
 class FolderWatcher:
     """Watches one discipline's eingang and triggers the pipeline."""
 
@@ -103,75 +73,90 @@ class FolderWatcher:
         self,
         config: PipelineConfig,
         quiet_seconds: float = 10.0,
-        poll_interval: float = 1.0,
         runner: Callable[[PipelineConfig], StatusWriter] = run_pipeline,
-        clock: Clock = time.monotonic,
+        timer_factory: TimerFactory = _default_timer_factory,
     ) -> None:
         self.config = config
         self.quiet_seconds = quiet_seconds
-        self.poll_interval = poll_interval
         self._runner = runner
-        self._detector = QuiescenceDetector(
-            quiet_seconds=quiet_seconds, clock=clock
-        )
-        self._stop_event = threading.Event()
+        self._timer_factory = timer_factory
         self._observer = None
-        self._poll_thread: Optional[threading.Thread] = None
         self._writer = StatusWriter(
-            status_path_for(config), config.discipline
+            status_path_for(config), config.discipline,
         )
+
+        self._timer_lock = threading.Lock()
+        self._pending_timer: Optional[threading.Timer] = None
+        self._stopped = False
 
     # --- public API -------------------------------------------------------
 
     def start(self) -> None:
-        """Start watching the eingang folder and the polling thread."""
+        """Start watchdog observation. No polling thread is needed."""
         from watchdog.observers import Observer
 
         eingang = self.config.paths.eingang
         eingang.mkdir(parents=True, exist_ok=True)
 
-        handler = _build_handler(self._detector)
+        handler = _build_handler(self._on_event)
         self._observer = Observer()
         self._observer.schedule(handler, str(eingang), recursive=True)
         self._observer.start()
-
-        self._poll_thread = threading.Thread(
-            target=self._poll_loop,
-            name=f"watcher-{self.config.discipline}-poll",
-            daemon=True,
-        )
-        self._poll_thread.start()
         self._writer.append_log(
-            f"Watcher started on {eingang} "
-            f"(quiet={self.quiet_seconds}s, poll={self.poll_interval}s)"
+            f"Watcher started on {eingang} (quiet={self.quiet_seconds}s)"
         )
 
     def stop(self) -> None:
-        self._stop_event.set()
+        with self._timer_lock:
+            self._stopped = True
+            if self._pending_timer is not None:
+                self._pending_timer.cancel()
+                self._pending_timer = None
+
         if self._observer is not None:
             self._observer.stop()
             self._observer.join(timeout=5.0)
-        if self._poll_thread is not None:
-            self._poll_thread.join(timeout=5.0)
         self._writer.append_log("Watcher stopped")
 
-    # --- core poll logic (testable without watchdog) ---------------------
+    # --- event-driven scheduling -----------------------------------------
+
+    def _on_event(self) -> None:
+        """Watchdog event hook: (re)schedule a deferred quiescence check."""
+        with self._timer_lock:
+            if self._stopped:
+                return
+            if self._pending_timer is not None:
+                self._pending_timer.cancel()
+            self._pending_timer = self._timer_factory(
+                self.quiet_seconds, self._fire_deferred_check
+            )
+            self._pending_timer.start()
+
+    def _fire_deferred_check(self) -> None:
+        """Timer callback: hand off to a daemon thread so the run does not
+        block the timer's own thread (it gets joined on watcher.stop())."""
+        with self._timer_lock:
+            self._pending_timer = None
+            if self._stopped:
+                return
+        threading.Thread(
+            target=self.check_and_trigger,
+            name=f"watcher-{self.config.discipline}-check",
+            daemon=True,
+        ).start()
+
+    # --- core trigger logic (test seam) ----------------------------------
 
     def check_and_trigger(self) -> bool:
-        """Run one poll iteration. Returns True iff the pipeline was started.
+        """Run one trigger evaluation. Returns True iff the pipeline started.
 
-        Public on purpose: tests call this directly without spinning up
-        the polling thread or watchdog observer.
+        Public on purpose: tests bypass the watchdog observer + timer and
+        call this directly after seeding the eingang.
         """
-        if not self._detector.is_quiet():
-            return False
-        # Re-confirm there really is content (events can fire on deletes too).
         folders = detect_folders(self.config.paths.eingang)
         if not folders:
-            self._detector.reset()
             return False
         self._writer.update(state=State.DETECTING)
-        self._detector.reset()
         try:
             self._runner(self.config)
             return True
@@ -180,14 +165,6 @@ class FolderWatcher:
             self._writer.append_log(f"Run skipped: {exc}")
             return False
 
-    def _poll_loop(self) -> None:
-        while not self._stop_event.is_set():
-            try:
-                self.check_and_trigger()
-            except Exception:  # pragma: no cover - defensive
-                log.exception("poll iteration failed")
-            self._stop_event.wait(self.poll_interval)
-
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -195,6 +172,8 @@ class FolderWatcher:
 
 def _main(argv) -> int:
     import argparse
+    import logging as logging_mod
+    import time
 
     from pipeline.config_loader import load_config
 
@@ -203,20 +182,15 @@ def _main(argv) -> int:
     )
     parser.add_argument("config", help="Path to config_doppel.json or config_einzel.json")
     parser.add_argument("--quiet-seconds", type=float, default=10.0)
-    parser.add_argument("--poll-interval", type=float, default=1.0)
     args = parser.parse_args(argv[1:])
 
-    logging.basicConfig(
-        level=logging.INFO,
+    logging_mod.basicConfig(
+        level=logging_mod.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
     config = load_config(args.config)
-    watcher = FolderWatcher(
-        config,
-        quiet_seconds=args.quiet_seconds,
-        poll_interval=args.poll_interval,
-    )
+    watcher = FolderWatcher(config, quiet_seconds=args.quiet_seconds)
 
     print(f"Watching {config.paths.eingang} for {config.discipline}")
     watcher.start()

@@ -1,24 +1,25 @@
 """Pipeline-status persistence (``status_doppel.json`` / ``status_einzel.json``).
 
-Each discipline owns one status file. The file is written atomically
-(temp file + ``os.replace``) so the Web-Interface (Step 3) can read it
-concurrently without ever seeing a half-written JSON document.
+Each discipline owns one status file managed by ``StatusWriter``, a thin
+subclass of ``pipeline.status_file.JsonStatusFile``. Terminal transitions
+(begin / finish / fail) flush durably; progress updates do not.
 """
 
 from __future__ import annotations
 
-import json
-import os
 import sys
-import threading
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pipeline.config_loader import PipelineConfig
+from pipeline.status_file import JsonStatusFile, now_iso
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+
+# Re-exported so existing imports keep working.
+LOG_TAIL_MAX = JsonStatusFile.LOG_TAIL_MAX
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +44,7 @@ class State:
 
 @dataclass
 class PipelineStatus:
-    """Snapshot of one discipline pipeline. Serialised to JSON on every change."""
+    """Snapshot of one discipline pipeline."""
     discipline: str
     state: str = State.IDLE
     folders_detected: List[str] = field(default_factory=list)
@@ -60,40 +61,38 @@ class PipelineStatus:
 
 
 # ---------------------------------------------------------------------------
-# Persistence helpers
+# Path helper
 # ---------------------------------------------------------------------------
 
-LOG_TAIL_MAX = 200  # keep last N lines for the Web UI
-
-
 def status_path_for(config: PipelineConfig) -> Path:
-    """Return the status file path for *config*'s discipline.
-
-    Sits next to the config file so all per-discipline state is grouped.
-    """
     if config.source_path is None:
         raise ValueError("config.source_path is None - cannot derive status path")
     return config.source_path.parent / f"status_{config.discipline.lower()}.json"
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-
+# ---------------------------------------------------------------------------
+# Standalone read/write helpers (used by tests + Web read-only views)
+# ---------------------------------------------------------------------------
 
 def write_status(path: Path, status: PipelineStatus) -> None:
-    """Atomically persist *status* to *path* (temp file + replace)."""
-    status.updated_at = _now_iso()
+    """Atomically persist *status*. Always durable (used by tests)."""
+    import json
+    import os
+
+    status.updated_at = now_iso()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         json.dump(status.to_dict(), fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
 
 
 def read_status(path: Path) -> Optional[PipelineStatus]:
-    """Load status from *path*, or ``None`` if the file does not exist yet."""
+    import json
+
     if not path.is_file():
         return None
     with path.open("r", encoding="utf-8") as fh:
@@ -102,73 +101,46 @@ def read_status(path: Path) -> Optional[PipelineStatus]:
 
 
 # ---------------------------------------------------------------------------
-# Mutator (thread-safe per instance)
+# Writer (thread-safe)
 # ---------------------------------------------------------------------------
 
-class StatusWriter:
-    """Thread-safe mutator that owns a status file for one discipline.
-
-    Multiple threads may call ``update`` concurrently; the lock guarantees
-    that no two writers race on the temp-file rename.
-    """
+class StatusWriter(JsonStatusFile[PipelineStatus]):
+    """Thread-safe ``PipelineStatus`` persistence with semantic transitions."""
 
     def __init__(self, path: Path, discipline: str) -> None:
-        self.path = path
-        self._lock = threading.Lock()
-        existing = read_status(path)
-        self._status = existing or PipelineStatus(discipline=discipline)
-        if existing is None:
-            write_status(self.path, self._status)
+        super().__init__(path, lambda: PipelineStatus(discipline=discipline))
 
     @property
     def status(self) -> PipelineStatus:
-        with self._lock:
-            # Return a shallow copy so callers cannot mutate without going
-            # through ``update``.
-            return PipelineStatus(**self._status.to_dict())
+        return self.state
 
-    def update(self, **fields: Any) -> PipelineStatus:
-        """Apply *fields* and persist."""
-        with self._lock:
-            for key, value in fields.items():
-                if not hasattr(self._status, key):
-                    raise AttributeError(
-                        f"PipelineStatus has no field {key!r}"
-                    )
-                setattr(self._status, key, value)
-            write_status(self.path, self._status)
-            return PipelineStatus(**self._status.to_dict())
-
-    def append_log(self, line: str) -> None:
-        """Add *line* to the rolling log tail and persist."""
-        with self._lock:
-            self._status.log_tail.append(f"{_now_iso()} {line}")
-            if len(self._status.log_tail) > LOG_TAIL_MAX:
-                self._status.log_tail = self._status.log_tail[-LOG_TAIL_MAX:]
-            write_status(self.path, self._status)
+    # ---- transitions (durable) ------------------------------------------
 
     def begin_run(self, folders: List[str]) -> None:
-        with self._lock:
-            self._status.state = State.MOVING
-            self._status.folders_detected = list(folders)
-            self._status.folders_processed = []
-            self._status.output_files = []
-            self._status.started_at = _now_iso()
-            self._status.finished_at = None
-            self._status.error = None
-            write_status(self.path, self._status)
+        self.update(
+            durable=True,
+            state=State.MOVING,
+            folders_detected=list(folders),
+            folders_processed=[],
+            output_files=[],
+            started_at=now_iso(),
+            finished_at=None,
+            error=None,
+        )
 
     def finish_run(self, output_files: List[str]) -> None:
-        with self._lock:
-            self._status.state = State.DONE
-            self._status.output_files = list(output_files)
-            self._status.finished_at = _now_iso()
-            self._status.error = None
-            write_status(self.path, self._status)
+        self.update(
+            durable=True,
+            state=State.DONE,
+            output_files=list(output_files),
+            finished_at=now_iso(),
+            error=None,
+        )
 
     def fail_run(self, error: str) -> None:
-        with self._lock:
-            self._status.state = State.ERROR
-            self._status.error = error
-            self._status.finished_at = _now_iso()
-            write_status(self.path, self._status)
+        self.update(
+            durable=True,
+            state=State.ERROR,
+            error=error,
+            finished_at=now_iso(),
+        )

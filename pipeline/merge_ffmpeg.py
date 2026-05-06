@@ -19,6 +19,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Sequence
 
@@ -38,6 +39,7 @@ class MergeResult:
     success: bool
     returncode: int
     stderr: str = ""
+    log_path: Optional[Path] = None
 
 
 class MergeError(RuntimeError):
@@ -98,6 +100,46 @@ def _default_runner(cmd: List[str]) -> "subprocess.CompletedProcess[str]":
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
+def _write_ffmpeg_log(
+    config: PipelineConfig,
+    folder: Path,
+    cmd: List[str],
+    completed: "subprocess.CompletedProcess[str]",
+) -> Optional[Path]:
+    """Persist the full FFmpeg invocation log for one folder.
+
+    Briefing s.7: "Logging - Datei offen halten". We write one log per
+    merge invocation under ``<config.paths.logs>/`` so a stderr blob
+    from a failed merge is preserved for post-mortem debugging instead
+    of being truncated to 200 chars in status.log_tail.
+    """
+    logs_dir = config.paths.logs
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+
+    # Microsecond suffix so two merges in the same second do not collide.
+    timestamp = (
+        datetime.now(timezone.utc)
+        .astimezone()
+        .strftime("%Y%m%d-%H%M%S-%f")
+    )
+    name = f"ffmpeg_{config.discipline.lower()}_{folder.name}_{timestamp}.log"
+    path = logs_dir / name
+    try:
+        with path.open("w", encoding="utf-8") as fh:
+            fh.write(f"# {' '.join(cmd)}\n")
+            fh.write(f"# returncode={completed.returncode}\n")
+            fh.write("# --- stdout ---\n")
+            fh.write(completed.stdout or "")
+            fh.write("\n# --- stderr ---\n")
+            fh.write(completed.stderr or "")
+    except OSError:
+        return None
+    return path
+
+
 def merge_folder(
     folder: Path,
     config: PipelineConfig,
@@ -129,12 +171,15 @@ def merge_folder(
     success = completed.returncode == 0
     stderr = completed.stderr or ""
 
+    log_path = _write_ffmpeg_log(config, folder, cmd, completed)
+
     return MergeResult(
         folder=folder,
         output=output_path,
         success=success,
         returncode=completed.returncode,
         stderr=stderr,
+        log_path=log_path,
     )
 
 

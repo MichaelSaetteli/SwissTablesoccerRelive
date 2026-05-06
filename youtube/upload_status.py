@@ -1,24 +1,23 @@
 """Atomic JSON status persistence for the YouTube upload phase.
 
-Mirrors ``watcher.status`` so the Web-Interface polls the upload state
-the same way it polls the pipeline state. Lives next to
-``status_<discipline>.json`` in the config dir.
+Same pattern as ``watcher.status``, just a different dataclass. See
+``pipeline.status_file`` for the shared base.
 """
 
 from __future__ import annotations
 
-import json
-import os
 import sys
-import threading
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pipeline.config_loader import PipelineConfig
+from pipeline.status_file import JsonStatusFile, now_iso
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+
+LOG_TAIL_MAX = JsonStatusFile.LOG_TAIL_MAX
 
 
 # ---------------------------------------------------------------------------
@@ -60,11 +59,8 @@ class UploadStatus:
 
 
 # ---------------------------------------------------------------------------
-# Persistence helpers
+# Path helper
 # ---------------------------------------------------------------------------
-
-LOG_TAIL_MAX = 200
-
 
 def upload_status_path_for(config: PipelineConfig) -> Path:
     if config.source_path is None:
@@ -77,12 +73,15 @@ def upload_status_path_for(config: PipelineConfig) -> Path:
     )
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-
+# ---------------------------------------------------------------------------
+# Standalone read/write helpers (used by tests + Web read-only views)
+# ---------------------------------------------------------------------------
 
 def write_upload_status(path: Path, status: UploadStatus) -> None:
-    status.updated_at = _now_iso()
+    import json
+    import os
+
+    status.updated_at = now_iso()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as fh:
@@ -94,6 +93,8 @@ def write_upload_status(path: Path, status: UploadStatus) -> None:
 
 
 def read_upload_status(path: Path) -> Optional[UploadStatus]:
+    import json
+
     if not path.is_file():
         return None
     with path.open("r", encoding="utf-8") as fh:
@@ -102,89 +103,76 @@ def read_upload_status(path: Path) -> Optional[UploadStatus]:
 
 
 # ---------------------------------------------------------------------------
-# Mutator
+# Writer
 # ---------------------------------------------------------------------------
 
-class UploadStatusWriter:
-    """Thread-safe writer mirroring watcher.status.StatusWriter."""
+class UploadStatusWriter(JsonStatusFile[UploadStatus]):
+    """Thread-safe ``UploadStatus`` persistence with semantic transitions."""
 
     def __init__(self, path: Path, discipline: str) -> None:
-        self.path = path
-        self._lock = threading.Lock()
-        existing = read_upload_status(path)
-        self._status = existing or UploadStatus(discipline=discipline)
-        if existing is None:
-            write_upload_status(self.path, self._status)
+        super().__init__(path, lambda: UploadStatus(discipline=discipline))
 
     @property
     def status(self) -> UploadStatus:
-        with self._lock:
-            return UploadStatus(**self._status.to_dict())
+        return self.state
 
-    def update(self, **fields: Any) -> UploadStatus:
-        with self._lock:
-            for key, value in fields.items():
-                if not hasattr(self._status, key):
-                    raise AttributeError(
-                        f"UploadStatus has no field {key!r}"
-                    )
-                setattr(self._status, key, value)
-            write_upload_status(self.path, self._status)
-            return UploadStatus(**self._status.to_dict())
-
-    def append_log(self, line: str) -> None:
-        with self._lock:
-            self._status.log_tail.append(f"{_now_iso()} {line}")
-            if len(self._status.log_tail) > LOG_TAIL_MAX:
-                self._status.log_tail = self._status.log_tail[-LOG_TAIL_MAX:]
-            write_upload_status(self.path, self._status)
+    # ---- transitions (durable) ------------------------------------------
 
     def begin(self, total_files: int, quota_hint: str) -> None:
-        with self._lock:
-            self._status.state = UploadState.PREPARING
-            self._status.total_files = total_files
-            self._status.completed_files = 0
-            self._status.current_file = ""
-            self._status.current_progress_percent = 0.0
-            self._status.uploaded_video_ids = []
-            self._status.playlist_id = ""
-            self._status.quota_hint = quota_hint
-            self._status.started_at = _now_iso()
-            self._status.finished_at = None
-            self._status.error = None
-            write_upload_status(self.path, self._status)
+        self.update(
+            durable=True,
+            state=UploadState.PREPARING,
+            total_files=total_files,
+            completed_files=0,
+            current_file="",
+            current_progress_percent=0.0,
+            uploaded_video_ids=[],
+            playlist_id="",
+            quota_hint=quota_hint,
+            started_at=now_iso(),
+            finished_at=None,
+            error=None,
+        )
 
     def begin_file(self, file: str) -> None:
-        with self._lock:
-            self._status.state = UploadState.UPLOADING
-            self._status.current_file = file
-            self._status.current_progress_percent = 0.0
-            write_upload_status(self.path, self._status)
+        self.update(
+            durable=False,  # progress milestone, not terminal
+            state=UploadState.UPLOADING,
+            current_file=file,
+            current_progress_percent=0.0,
+        )
+
+    def finish(self) -> None:
+        self.update(
+            durable=True,
+            state=UploadState.DONE,
+            current_file="",
+            current_progress_percent=0.0,
+            finished_at=now_iso(),
+            error=None,
+        )
+
+    def fail(self, error: str) -> None:
+        self.update(
+            durable=True,
+            state=UploadState.ERROR,
+            error=error,
+            finished_at=now_iso(),
+        )
+
+    # ---- progress (non-durable) -----------------------------------------
 
     def update_progress(self, percent: float) -> None:
-        with self._lock:
-            self._status.current_progress_percent = max(0.0, min(100.0, percent))
-            write_upload_status(self.path, self._status)
+        self.update(
+            durable=False,
+            current_progress_percent=max(0.0, min(100.0, percent)),
+        )
 
     def finish_file(self, video_id: str) -> None:
         with self._lock:
-            self._status.completed_files += 1
-            self._status.current_progress_percent = 100.0
-            self._status.uploaded_video_ids.append(video_id)
-            write_upload_status(self.path, self._status)
-
-    def finish(self) -> None:
-        with self._lock:
-            self._status.state = UploadState.DONE
-            self._status.current_file = ""
-            self._status.current_progress_percent = 0.0
-            self._status.finished_at = _now_iso()
-            self._status.error = None
-            write_upload_status(self.path, self._status)
-
-    def fail(self, error: str) -> None:
-        with self._lock:
-            self._status.state = UploadState.ERROR
-            self._status.error = error
-            self._status.finished_at = _now_iso()
-            write_upload_status(self.path, self._status)
+            self._state.completed_files += 1
+            self._state.current_progress_percent = 100.0
+            self._state.uploaded_video_ids = list(
+                self._state.uploaded_video_ids
+            ) + [video_id]
+            self._persist(durable=False)

@@ -17,6 +17,7 @@ progress in real time.
 from __future__ import annotations
 
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -27,6 +28,18 @@ from .metadata_builder import VideoMetadata, build_upload_batch, quota_hint
 from .upload_status import UploadStatusWriter, upload_status_path_for
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+
+# Per-discipline upload locks - mirror watcher.pipeline_runner. Two
+# parallel "Upload starten" clicks from a flaky network now fail fast
+# instead of racing on the same status file.
+_upload_locks: Dict[str, threading.Lock] = {}
+_locks_lock = threading.Lock()
+
+
+def _lock_for(config: PipelineConfig) -> threading.Lock:
+    with _locks_lock:
+        return _upload_locks.setdefault(config.discipline, threading.Lock())
 
 
 # ---------------------------------------------------------------------------
@@ -195,65 +208,79 @@ def upload_batch(
 
     Files are uploaded sequentially (YouTube quota makes parallelism
     pointless). Per-file progress is reported through *writer*.
+
+    Concurrency: a per-discipline lock prevents two simultaneous
+    invocations for the same discipline (e.g. the operator clicking
+    "Upload starten" twice). Doppel and Einzel may upload in parallel.
     """
-    output_dir = config.paths.output
-    if not output_dir.is_dir():
-        raise UploadError(f"Output dir not found: {output_dir}")
-    files = sorted(
-        p for p in output_dir.iterdir()
-        if p.is_file() and p.suffix.lower() == ".mp4"
-    )
-    if not files:
-        raise UploadError("No mp4 files in output dir")
-
-    metadata_list: List[VideoMetadata] = build_upload_batch(
-        config, [f.name for f in files],
-    )
-
-    if writer is None:
-        writer = UploadStatusWriter(
-            upload_status_path_for(config), config.discipline,
+    lock = _lock_for(config)
+    if not lock.acquire(blocking=False):
+        raise UploadError(
+            f"Upload for {config.discipline} is already running"
         )
 
-    writer.begin(
-        total_files=len(metadata_list),
-        quota_hint=quota_hint(len(metadata_list)),
-    )
-
     try:
-        playlist_id = _resolve_playlist(service, config, writer)
-        if playlist_id:
-            writer.update(playlist_id=playlist_id)
+        output_dir = config.paths.output
+        if not output_dir.is_dir():
+            raise UploadError(f"Output dir not found: {output_dir}")
+        files = sorted(
+            p for p in output_dir.iterdir()
+            if p.is_file() and p.suffix.lower() == ".mp4"
+        )
+        if not files:
+            raise UploadError("No mp4 files in output dir")
 
-        result = BatchResult(playlist_id=playlist_id)
+        metadata_list: List[VideoMetadata] = build_upload_batch(
+            config, [f.name for f in files],
+        )
 
-        for meta, path in zip(metadata_list, files):
-            writer.begin_file(meta.file)
-            writer.append_log(f"Upload start: {meta.file} -> {meta.title!r}")
-
-            video_id = upload_video(
-                service,
-                path,
-                title=meta.title,
-                description=meta.description,
-                progress_callback=lambda pct, w=writer: w.update_progress(pct),
+        if writer is None:
+            writer = UploadStatusWriter(
+                upload_status_path_for(config), config.discipline,
             )
-            writer.finish_file(video_id)
-            writer.append_log(f"Upload OK: {meta.file} (id={video_id})")
-            result.uploads.append(UploadOutcome(
-                file=meta.file, video_id=video_id, title=meta.title,
-            ))
 
+        writer.begin(
+            total_files=len(metadata_list),
+            quota_hint=quota_hint(len(metadata_list)),
+        )
+
+        try:
+            playlist_id = _resolve_playlist(service, config, writer)
             if playlist_id:
-                add_to_playlist(service, playlist_id, video_id)
-                writer.append_log(
-                    f"Added {video_id} to playlist {playlist_id}"
+                writer.update(playlist_id=playlist_id)
+
+            result = BatchResult(playlist_id=playlist_id)
+
+            for meta, path in zip(metadata_list, files):
+                writer.begin_file(meta.file)
+                writer.append_log(f"Upload start: {meta.file} -> {meta.title!r}")
+
+                video_id = upload_video(
+                    service,
+                    path,
+                    title=meta.title,
+                    description=meta.description,
+                    progress_callback=lambda pct, w=writer: w.update_progress(pct),
                 )
+                writer.finish_file(video_id)
+                writer.append_log(f"Upload OK: {meta.file} (id={video_id})")
+                result.uploads.append(UploadOutcome(
+                    file=meta.file, video_id=video_id, title=meta.title,
+                ))
 
-        writer.finish()
-        return result
+                if playlist_id:
+                    add_to_playlist(service, playlist_id, video_id)
+                    writer.append_log(
+                        f"Added {video_id} to playlist {playlist_id}"
+                    )
 
-    except Exception as exc:
-        writer.fail(f"{type(exc).__name__}: {exc}")
-        writer.append_log(f"Upload aborted: {exc}")
-        raise
+            writer.finish()
+            return result
+
+        except Exception as exc:
+            writer.fail(f"{type(exc).__name__}: {exc}")
+            writer.append_log(f"Upload aborted: {exc}")
+            raise
+
+    finally:
+        lock.release()

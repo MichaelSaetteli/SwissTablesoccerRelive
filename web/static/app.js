@@ -1,9 +1,9 @@
 /* Vanilla JS for the Pipeline Web-Interface.
  * - Tab switching (Doppel / Einzel)
- * - Status polling every 3s (briefing s.5)
- * - Manual pipeline trigger
- * - YouTube config form auto-save
- * - Output file list with download links
+ * - Single combined poll of /api/state every 3s (briefing s.5)
+ * - Manual pipeline trigger + YouTube upload trigger
+ * - Filename + YouTube config forms with autosave
+ * - Output file list with per-file download links
  */
 (function () {
   "use strict";
@@ -44,18 +44,21 @@
     return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
   }
 
-  async function pollStatus(panel) {
+  /**
+   * Single combined poll - replaces the previous two parallel fetches
+   * (/api/status + /api/files + /api/upload-status) with one request.
+   */
+  async function pollState(panel) {
     const discipline = panel.dataset.discipline;
     try {
-      const [statusRes, filesRes] = await Promise.all([
-        fetch(`/api/status/${discipline}`, { credentials: "same-origin" }),
-        fetch(`/api/files/${discipline}`, { credentials: "same-origin" }),
-      ]);
-      if (!statusRes.ok || !filesRes.ok) return;
-      const status = await statusRes.json();
-      const fileList = await filesRes.json();
-      renderStatus(panel, status);
-      renderFiles(panel, discipline, fileList.files);
+      const res = await fetch(`/api/state/${discipline}`, {
+        credentials: "same-origin",
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      renderStatus(panel, data.pipeline);
+      renderFiles(panel, discipline, data.files);
+      renderUploadStatus(panel, data.upload);
     } catch (e) {
       console.warn("poll failed", e);
     }
@@ -146,20 +149,6 @@
       }
     } catch (e) {
       console.warn("preview failed", e);
-    }
-  }
-
-  async function pollUploadStatus(panel) {
-    const discipline = panel.dataset.discipline;
-    try {
-      const res = await fetch(`/api/upload-status/${discipline}`, {
-        credentials: "same-origin",
-      });
-      if (!res.ok) return;
-      const status = await res.json();
-      renderUploadStatus(panel, status);
-    } catch (e) {
-      console.warn("upload poll failed", e);
     }
   }
 
@@ -403,10 +392,8 @@
       loadFilenameConfig(panel);
       loadYoutubeConfig(panel);
       loadUploadPreview(panel);
-      pollStatus(panel);
-      pollUploadStatus(panel);
-      setInterval(() => pollStatus(panel), POLL_MS);
-      setInterval(() => pollUploadStatus(panel), POLL_MS);
+      pollState(panel);
+      setInterval(() => pollState(panel), POLL_MS);
     });
   });
 })();

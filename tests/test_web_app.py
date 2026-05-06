@@ -124,7 +124,7 @@ def test_index_redirects_to_login_when_anonymous(client) -> None:
 
 
 def test_api_returns_401_when_anonymous(client) -> None:
-    res = client.get("/api/status/Doppel")
+    res = client.get("/api/state/Doppel")
     assert res.status_code == 401
 
 
@@ -150,7 +150,7 @@ def test_login_with_wrong_password(client) -> None:
 def test_logout_clears_session(client) -> None:
     _login(client)
     client.get("/logout", follow_redirects=False)
-    res = client.get("/api/status/Doppel")
+    res = client.get("/api/state/Doppel")
     assert res.status_code == 401
 
 
@@ -184,30 +184,44 @@ def test_index_disables_missing_discipline(app_factory) -> None:
 # /api/status
 # ---------------------------------------------------------------------------
 
-def test_api_status_returns_idle_for_fresh_config(client) -> None:
+def test_api_state_returns_combined_payload(client) -> None:
     _login(client)
-    res = client.get("/api/status/Doppel")
+    res = client.get("/api/state/Doppel")
     assert res.status_code == 200
     data = res.get_json()
-    assert data["discipline"] == "Doppel"
-    assert data["state"] == State.IDLE
+    assert set(data.keys()) == {"pipeline", "upload", "files"}
+    assert data["pipeline"]["discipline"] == "Doppel"
+    assert data["pipeline"]["state"] == State.IDLE
+    assert data["upload"]["discipline"] == "Doppel"
+    assert data["upload"]["state"] == "idle"
+    assert data["files"] == []
 
 
-def test_api_status_unknown_discipline(client) -> None:
+def test_api_state_unknown_discipline(client) -> None:
     _login(client)
-    res = client.get("/api/status/Mixed")
+    res = client.get("/api/state/Mixed")
     assert res.status_code == 404
 
 
-def test_api_status_reflects_writer_changes(app, client, doppel_config_path: Path) -> None:
+def test_api_state_reflects_writer_changes(app, client, doppel_config_path: Path) -> None:
     _login(client)
     cfg = app.config["PIPELINE_CONFIGS"]["Doppel"]
     writer = StatusWriter(status_path_for(cfg), "Doppel")
     writer.update(state=State.MERGING, folders_detected=["ET03"])
 
-    data = client.get("/api/status/Doppel").get_json()
-    assert data["state"] == State.MERGING
-    assert data["folders_detected"] == ["ET03"]
+    data = client.get("/api/state/Doppel").get_json()
+    assert data["pipeline"]["state"] == State.MERGING
+    assert data["pipeline"]["folders_detected"] == ["ET03"]
+
+
+def test_api_state_lists_output_files(app, client) -> None:
+    _login(client)
+    cfg = app.config["PIPELINE_CONFIGS"]["Doppel"]
+    cfg.paths.output.mkdir(parents=True, exist_ok=True)
+    make_mp4(cfg.paths.output, "video_a.mp4", b"abc")
+
+    data = client.get("/api/state/Doppel").get_json()
+    assert [f["name"] for f in data["files"]] == ["video_a.mp4"]
 
 
 # ---------------------------------------------------------------------------
@@ -248,14 +262,14 @@ def test_api_run_disabled_discipline(app_factory) -> None:
 # /api/files + downloads
 # ---------------------------------------------------------------------------
 
-def test_api_files_lists_output_dir(app, client) -> None:
+def test_state_lists_output_files_with_sizes(app, client) -> None:
     _login(client)
     cfg = app.config["PIPELINE_CONFIGS"]["Doppel"]
     cfg.paths.output.mkdir(parents=True, exist_ok=True)
     make_mp4(cfg.paths.output, "video_a.mp4", b"abc")
     make_mp4(cfg.paths.output, "video_b.mp4", b"defgh")
 
-    data = client.get("/api/files/Doppel").get_json()
+    data = client.get("/api/state/Doppel").get_json()
     names = [f["name"] for f in data["files"]]
     sizes = {f["name"]: f["size_bytes"] for f in data["files"]}
     assert names == ["video_a.mp4", "video_b.mp4"]
@@ -437,11 +451,11 @@ def test_upload_preview_empty_output(app, client) -> None:
     assert data["quota_hint"] == ""
 
 
-def test_upload_status_starts_idle(client) -> None:
+def test_upload_state_starts_idle(client) -> None:
     _login(client)
-    data = client.get("/api/upload-status/Doppel").get_json()
-    assert data["state"] == "idle"
-    assert data["total_files"] == 0
+    data = client.get("/api/state/Doppel").get_json()
+    assert data["upload"]["state"] == "idle"
+    assert data["upload"]["total_files"] == 0
 
 
 def test_upload_endpoint_uses_injected_runner(app_factory, doppel_config_path: Path) -> None:
@@ -468,14 +482,15 @@ def test_upload_endpoint_uses_injected_runner(app_factory, doppel_config_path: P
 
     # Wait until the background thread persists its state change.
     import time
-    status: Dict[str, object] = {}
+    upload_state: Dict[str, object] = {}
     for _ in range(40):
-        status = client.get("/api/upload-status/Doppel").get_json()
-        if status["state"] != "idle":
+        payload = client.get("/api/state/Doppel").get_json()
+        upload_state = payload["upload"]
+        if upload_state["state"] != "idle":
             break
         time.sleep(0.05)
     assert captured and captured[0]["discipline"] == "Doppel"
-    assert status["state"] == "done"
+    assert upload_state["state"] == "done"
 
 
 def test_upload_endpoint_disabled_discipline_returns_409(
