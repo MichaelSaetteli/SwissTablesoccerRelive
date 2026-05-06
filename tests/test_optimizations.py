@@ -142,3 +142,148 @@ def test_merge_folder_log_is_per_invocation(tmp_path: Path,
     r2 = merge_folder(folder, cfg, runner=fake_runner)
     assert r1.log_path != r2.log_path
     assert r1.log_path.parent == cfg.paths.logs
+
+
+# ---------------------------------------------------------------------------
+# A: atomic folder move fast path
+# ---------------------------------------------------------------------------
+
+def test_move_path_uses_single_rename_when_target_missing(monkeypatch, tmp_path: Path) -> None:
+    """Fast path: one os.rename instead of N per-file moves."""
+    import os
+    from pipeline.MoveFiles import move_path
+
+    src = tmp_path / "ET01"
+    src.mkdir()
+    for i in range(5):
+        make_mp4(src, f"video_{i:03d}.mp4")
+    dst = tmp_path / "work" / "ET01"  # does NOT exist yet
+
+    rename_calls: List[str] = []
+    real_rename = os.rename
+
+    def spy_rename(a, b):
+        rename_calls.append(f"{a} -> {b}")
+        return real_rename(a, b)
+
+    monkeypatch.setattr("pipeline.MoveFiles.os.rename", spy_rename)
+
+    moved = move_path(src, dst)
+    assert len(moved) == 5
+    # Only ONE rename, the whole-folder move - not 5.
+    assert len(rename_calls) == 1
+    assert str(dst) in rename_calls[0]
+    assert not src.exists()
+
+
+def test_move_path_falls_back_to_per_file_when_target_exists(tmp_path: Path) -> None:
+    """When dst already exists we cannot atomic-rename - merge instead."""
+    from pipeline.MoveFiles import move_path
+
+    src = tmp_path / "ET01"
+    src.mkdir()
+    make_mp4(src, "video_001.mp4")
+    dst = tmp_path / "work" / "ET01"
+    dst.mkdir(parents=True)
+    make_mp4(dst, "existing.mp4")  # pre-populated
+
+    moved = move_path(src, dst)
+    names = sorted(p.name for p in dst.iterdir())
+    assert names == ["existing.mp4", "video_001.mp4"]
+    assert moved == [dst / "video_001.mp4"]
+    assert not src.exists()
+
+
+# ---------------------------------------------------------------------------
+# B: atomic output write (.partial -> rename)
+# ---------------------------------------------------------------------------
+
+def test_merge_folder_failure_does_not_leave_partial(tmp_path: Path,
+                                                     doppel_config_path: Path) -> None:
+    """Failed ffmpeg run must not leave a corrupt half-written output."""
+    cfg = load_config(doppel_config_path)
+    folder = tmp_path / "ET05"
+    folder.mkdir()
+    make_mp4(folder, "video_001.mp4")
+
+    def failing_runner(cmd):
+        # Simulate ffmpeg writing partial bytes then crashing.
+        Path(cmd[-1]).parent.mkdir(parents=True, exist_ok=True)
+        Path(cmd[-1]).write_bytes(b"\x00\x00\x00")  # corrupt partial
+        return subprocess.CompletedProcess(args=cmd, returncode=1,
+                                           stdout="", stderr="boom")
+
+    result = merge_folder(folder, cfg, runner=failing_runner)
+    assert result.success is False
+    # Final name must NOT exist - we never serve the corrupt bytes.
+    assert not result.output.exists()
+    # Partial must also have been cleaned up.
+    assert not list(cfg.paths.output.glob(".*.partial"))
+
+
+# ---------------------------------------------------------------------------
+# C: disk-space pre-flight
+# ---------------------------------------------------------------------------
+
+def test_check_disk_space_raises_when_too_tight(monkeypatch, tmp_path: Path) -> None:
+    from collections import namedtuple
+
+    from watcher.pipeline_runner import PipelineRunError, check_disk_space
+
+    folder = tmp_path / "ET01"
+    folder.mkdir()
+    make_mp4(folder, "video_001.mp4", b"x" * 1024)  # 1 KB
+    output = tmp_path / "out"
+
+    Usage = namedtuple("Usage", "total used free")
+    monkeypatch.setattr(
+        "watcher.pipeline_runner.shutil.disk_usage",
+        lambda _: Usage(total=10_000, used=9_999, free=100),
+    )
+    with pytest.raises(PipelineRunError, match="Not enough free space"):
+        check_disk_space([folder], output)
+
+
+def test_check_disk_space_passes_when_room(monkeypatch, tmp_path: Path) -> None:
+    from collections import namedtuple
+
+    from watcher.pipeline_runner import check_disk_space
+
+    folder = tmp_path / "ET01"
+    folder.mkdir()
+    make_mp4(folder, "video_001.mp4", b"x" * 1024)
+    output = tmp_path / "out"
+
+    Usage = namedtuple("Usage", "total used free")
+    monkeypatch.setattr(
+        "watcher.pipeline_runner.shutil.disk_usage",
+        lambda _: Usage(total=10**9, used=0, free=10**9),
+    )
+    # No exception means pass.
+    check_disk_space([folder], output)
+
+
+def test_run_pipeline_aborts_when_disk_full(monkeypatch, doppel_config_path: Path) -> None:
+    """End-to-end: a tight volume must abort BEFORE the move step."""
+    from collections import namedtuple
+
+    from watcher.pipeline_runner import PipelineRunError, run_pipeline
+
+    cfg = load_config(doppel_config_path)
+    cfg.paths.eingang.mkdir(parents=True, exist_ok=True)
+    folder = cfg.paths.eingang / "ET01"
+    folder.mkdir()
+    make_mp4(folder, "src.mp4", b"x" * 4096)
+
+    Usage = namedtuple("Usage", "total used free")
+    monkeypatch.setattr(
+        "watcher.pipeline_runner.shutil.disk_usage",
+        lambda _: Usage(total=10**6, used=10**6 - 100, free=100),
+    )
+
+    with pytest.raises(PipelineRunError, match="Not enough free space"):
+        run_pipeline(cfg)
+
+    # Crucially: input must STILL be in eingang. We aborted before moving.
+    assert folder.is_dir()
+    assert (folder / "src.mp4").is_file()

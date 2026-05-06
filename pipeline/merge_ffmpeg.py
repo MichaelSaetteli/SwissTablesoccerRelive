@@ -14,6 +14,7 @@ workers, configurable in ``config.ffmpeg.max_workers``).
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import sys
@@ -149,6 +150,11 @@ def merge_folder(
 
     *runner* defaults to ``subprocess.run``; tests inject a fake to avoid
     actually invoking FFmpeg.
+
+    Atomicity: FFmpeg writes to a hidden ``.<name>.partial`` file. Only
+    after a clean exit is the file renamed to its final name, so the
+    Web-Interface never serves a half-written output. On failure the
+    partial is removed so the work folder stays clean.
     """
     if not folder.is_dir():
         raise MergeError(f"Folder is not a directory: {folder}")
@@ -161,10 +167,11 @@ def merge_folder(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_name = build_output_filename(config.filename_constants, folder.name)
-    output_path = output_dir / output_name
+    final_path = output_dir / output_name
+    partial_path = output_dir / f".{output_name}.partial"
 
     concat_list = write_concat_list(folder, files)
-    cmd = build_ffmpeg_command(concat_list, output_path)
+    cmd = build_ffmpeg_command(concat_list, partial_path)
 
     run = runner or _default_runner
     completed = run(cmd)
@@ -173,9 +180,25 @@ def merge_folder(
 
     log_path = _write_ffmpeg_log(config, folder, cmd, completed)
 
+    if success and partial_path.is_file():
+        os.replace(partial_path, final_path)
+    else:
+        # Clean up the partial so a re-run starts fresh.
+        try:
+            partial_path.unlink()
+        except OSError:
+            pass
+
+    # Drop the concat list - it is regenerated on every run anyway and
+    # accumulating these in work_*/ETxx/ adds clutter.
+    try:
+        concat_list.unlink()
+    except OSError:
+        pass
+
     return MergeResult(
         folder=folder,
-        output=output_path,
+        output=final_path,
         success=success,
         returncode=completed.returncode,
         stderr=stderr,

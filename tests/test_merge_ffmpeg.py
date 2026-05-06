@@ -137,8 +137,14 @@ def test_merge_folder_calls_runner_with_expected_argv(
     assert len(runner.calls) == 1
     cmd = runner.calls[0]
     assert cmd[0] == "ffmpeg"
-    assert cmd[-1] == str(result.output)
+    # Atomic write: ffmpeg targets a hidden ``.<name>.partial`` file
+    # which is renamed to result.output only after a clean exit.
+    assert cmd[-1].endswith(f".{expected_name}.partial")
     assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
+    assert result.output.is_file()  # rename succeeded
+    assert not Path(cmd[-1]).exists()  # partial cleaned up
+    # concat_list.txt must be cleaned up too (D)
+    assert not (folder / "concat_list.txt").exists()
 
 
 def test_merge_folder_raises_on_empty(tmp_path: Path,

@@ -5,18 +5,23 @@ For same-volume moves Python's ``shutil.move`` does an atomic rename; for
 cross-volume moves it falls back to copy-then-delete. This is fine for the
 NAS where eingang/work/output all live under ``/volume1/video-pipeline``.
 
+Performance note: for directory moves where the destination does NOT yet
+exist (the common eingang->work case), we take a fast path that does a
+single atomic ``os.rename`` of the whole directory instead of N per-file
+moves. On a ``ET01/`` folder with 24 mp4s this is 24 syscalls vs 1.
+
 Usage::
 
     python MoveFiles.py <src> <dst>
 
-If ``<src>`` is a directory, its *contents* are moved into ``<dst>`` (the
-``<dst>`` directory is created if missing). If ``<src>`` is a file, it is
-moved into ``<dst>`` (which must be an existing directory or a target file
-path).
+If ``<src>`` is a directory and ``<dst>`` exists, the *contents* are
+merged into ``<dst>``. If ``<dst>`` does not exist, the directory is
+renamed atomically.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -36,8 +41,11 @@ def move_path(src: Path, dst: Path) -> List[Path]:
       * If ``src`` is a file, it is moved to ``dst`` (treating ``dst`` as a
         target file path if its parent exists, or as a target directory if
         ``dst`` itself is an existing directory).
-      * If ``src`` is a directory, *its contents* are moved into ``dst``
-        (created if missing). The empty source directory is then removed.
+      * If ``src`` is a directory and ``dst`` does NOT exist, the whole
+        directory is renamed atomically (fast path: 1 syscall).
+      * If ``src`` is a directory and ``dst`` exists, *its contents* are
+        merged into ``dst`` (slow path: per-file moves). The empty source
+        directory is then removed.
     """
     src = Path(src)
     dst = Path(dst)
@@ -55,17 +63,28 @@ def move_path(src: Path, dst: Path) -> List[Path]:
         return [target]
 
     if src.is_dir():
+        # Fast path: target does not exist yet -> single atomic rename.
+        # Same-volume case ends in microseconds; cross-volume falls back
+        # to the per-file loop via the OSError handler below.
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.rename(str(src), str(dst))
+            except OSError:
+                # Cross-volume rename / EXDEV -> fall through to copy loop.
+                pass
+            else:
+                return sorted(dst.iterdir())
+
         dst.mkdir(parents=True, exist_ok=True)
         moved: List[Path] = []
         for entry in sorted(src.iterdir()):
             target = dst / entry.name
             shutil.move(str(entry), str(target))
             moved.append(target)
-        # Remove the now-empty source directory (only if we own it and it's empty)
         try:
             src.rmdir()
         except OSError:
-            # Non-empty (e.g. dotfiles slipped in) -> leave alone, do not crash
             pass
         return moved
 

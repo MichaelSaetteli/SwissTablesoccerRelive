@@ -259,7 +259,115 @@ ein externes Ziel sichern.
 
 ---
 
-## 14. Troubleshooting
+## 14. Performance-Tuning fuer 1-2 TB Durchlaeufe
+
+Stream-Copy (`-c copy`) ist auf der DS1522+ I/O-bound, nicht CPU-bound.
+Software-Optimierungen (atomic ops, Disk-Space-Preflight, Watcher-Timer)
+sind bereits implementiert; die folgenden **Hardware-/Ops-Hebel** machen
+in der Praxis den Unterschied. Vor jedem Eingriff: `scripts/bench_io.sh`
+laufen lassen (kommt in einem spaeteren Schritt) und Werte teilen.
+
+### 14a. Read- und Write-Volume trennen
+
+Wirkungsvollste Einzelmassnahme. Aktuell liest und schreibt FFmpeg auf
+demselben Volume - die HDD-Koepfe wechseln staendig zwischen Lesen und
+Schreiben (Head-Thrashing). Bei zwei Volumes wird parallel gelesen und
+geschrieben.
+
+**Empfohlenes Layout der 5 Bays:**
+
+| Volume | Bays | RAID | Rolle |
+|---|---|---|---|
+| Volume 1 | 1 + 2 | RAID 1 (Mirror) | `/volume1/video-pipeline/eingang_*` + `work_*` |
+| Volume 2 | 3 + 4 + 5 | SHR (oder RAID 5) | `/volume2/video-pipeline/output_*` + `logs/` |
+
+In `config_doppel.json` / `config_einzel.json` die Pfade entsprechend
+aufteilen, z.B.:
+
+```json
+"paths": {
+  "eingang": "/volume1/eingang_doppel",
+  "work":    "/volume1/work_doppel",
+  "output":  "/volume2/output_doppel",
+  "logs":    "/volume2/logs"
+}
+```
+
+Wenn beide Volumes als `/data` in den Container gemountet werden,
+mounted in `docker-compose.yml`:
+
+```yaml
+volumes:
+  - /volume1:/volume1
+  - /volume2:/volume2
+```
+
+**Erwarteter Speedup:** 2-3x fuer die FFmpeg-Phase.
+
+### 14b. SSD-Cache aktivieren
+
+Synology unterstuetzt einen Read- oder Read-Write-SSD-Cache vor dem
+Volume. **DSM-Speicher-Manager -> Speicherpool -> SSD-Cache**.
+
+Empfohlen: 1-2 NVMe-M.2-SSDs in den dafuer vorgesehenen Slots der
+DS1522+, als Read-Write-Cache fuer das **work**-Volume.
+
+**Erwarteter Speedup:** 1.5-2x fuer Random-IO; bei reinem
+Sequenzial-IO (unser Fall) deutlich weniger Effekt - lohnt sich vor
+allem dann, wenn der Watcher stark fragmentierte SD-Karten-Files
+verarbeitet.
+
+### 14c. RAID-Wahl: SHR vs. RAID 10
+
+| RAID | Sequenzial-Write | Concurrent-Write | Kapazitaet |
+|---|---|---|---|
+| SHR (default) | gut | mittel | hoch |
+| RAID 5 | gut | mittel | hoch |
+| RAID 10 | sehr gut | sehr gut | halbiert |
+
+Bei 4 parallelen FFmpeg-Workern profitiert RAID 10 vom hoeheren
+parallelen Write-Durchsatz. Fuer reines Archivvolumen (wo
+Geschwindigkeit egal ist) bleibt SHR sinnvoll.
+
+**Erwarteter Speedup:** ~1.5x bei concurrent writes.
+
+### 14d. `max_workers` benchmarken
+
+In `config_*.json` -> `ffmpeg.max_workers`. Default = 4. Optimum
+haengt am RAID-Setup:
+
+| Setup | Empfohlen |
+|---|---|
+| Single HDD oder RAID 1 | 1-2 (mehr -> Head-Thrashing) |
+| RAID 5 / SHR | 2-4 |
+| RAID 10 | 4-6 |
+| SSD-only | 4-8 |
+
+Aenderung wirkt beim naechsten Pipeline-Lauf, kein Container-Restart noetig.
+
+### 14e. `quiet_seconds` an Upload-Zeit anpassen
+
+Default = 10 s. Bei 1-2 TB ueber SMB ueber 10GbE haelt der Aufnahme-Laptop
+die Verbindung typischerweise dauerhaft - das ist genug. Falls der Laptop
+zwischendurch laenger pausiert (z.B. SD-Karten-Wechsel), kann das den
+Watcher zu frueh ausloesen. Dann in `web/folder_watcher`-Aufruf bzw. ueber
+einen ENV-Override (TODO: noch nicht exponiert) auf 30-60 s anheben.
+
+### 14f. Netzwerk: 10GbE-Karte verifizieren
+
+```bash
+ssh admin@<NAS-IP>
+ip link show | grep -E "10G|MTU"
+ethtool eth1 | grep Speed   # eth1 ist normalerweise die 10GbE-Karte
+```
+
+Erwartet: `Speed: 10000Mb/s`. Wenn nicht: Switch + Kabel pruefen, in
+DSM-Systemsteuerung -> Netzwerk -> Netzwerkschnittstelle die Verbindung
+neu konfigurieren.
+
+---
+
+## 15. Troubleshooting
 
 **Container startet nicht:**
 ```bash

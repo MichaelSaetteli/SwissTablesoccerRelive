@@ -13,6 +13,7 @@ Independent disciplines (Doppel/Einzel) are unaffected by each other.
 
 from __future__ import annotations
 
+import shutil
 import sys
 import threading
 import traceback
@@ -68,6 +69,45 @@ def _step_move(folders: Sequence[Path], work_dir: Path) -> List[Path]:
     return moved_folders
 
 
+# Stream-copy concat means output bytes ~= sum of input bytes. We add a
+# 5 % safety cushion to cover MP4 container overhead and stay clear of
+# edge-of-volume "no space" errors that would crash a 30-minute merge.
+DISK_SPACE_SAFETY_FACTOR = 1.05
+
+
+def _bytes_under(folders: Sequence[Path]) -> int:
+    """Sum the size of every regular file under *folders*."""
+    total = 0
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        for entry in folder.iterdir():
+            if entry.is_file():
+                try:
+                    total += entry.stat().st_size
+                except OSError:
+                    pass
+    return total
+
+
+def check_disk_space(folders: Sequence[Path], output_dir: Path) -> None:
+    """Raise ``PipelineRunError`` if the output volume is too tight.
+
+    Briefing s.1 says one run produces 1-2 TB. Running out of disk
+    halfway through ffmpeg leaves behind a corrupt ``.partial`` and
+    wastes 30+ minutes of work; a 1-second pre-flight is well worth it.
+    """
+    needed = int(_bytes_under(folders) * DISK_SPACE_SAFETY_FACTOR)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(output_dir).free
+    if needed > free:
+        gb = lambda n: f"{n / 1024**3:.1f} GB"
+        raise PipelineRunError(
+            f"Not enough free space on {output_dir}: "
+            f"need ~{gb(needed)} (incl. 5 % cushion), have {gb(free)}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
@@ -106,6 +146,16 @@ def run_pipeline(config: PipelineConfig) -> StatusWriter:
             writer.update(state=State.IDLE)
             writer.append_log("No folders detected in eingang - run skipped")
             return writer
+
+        # Pre-flight: refuse to start if the output volume cannot hold the
+        # result. Cheap (one stat per file + one statvfs) and saves 30+
+        # minutes of ffmpeg time on a doomed run.
+        try:
+            check_disk_space(folders, config.paths.output)
+        except PipelineRunError as exc:
+            writer.fail_run(str(exc))
+            writer.append_log(f"Aborted: {exc}")
+            raise
 
         writer.begin_run([f.name for f in folders])
         writer.append_log(f"Detected {len(folders)} folder(s): "
