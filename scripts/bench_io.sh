@@ -362,13 +362,10 @@ fi
 # 6. Machine-readable summary
 # ---------------------------------------------------------------------------
 
-section "Machine-readable summary (copy block to the chat)"
-echo "BEGIN_JSON"
-{
+emit_json() {
     printf '{\n'
-    first=1
+    local first=1
     while IFS='=' read -r key value; do
-        # Numbers stay numeric; everything else gets quoted.
         if printf '%s' "$value" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
             quoted="$value"
         else
@@ -380,7 +377,20 @@ echo "BEGIN_JSON"
     done < "$SUMMARY_FILE"
     printf '\n}\n'
 }
+
+section "Machine-readable summary (copy block to the chat)"
+echo "BEGIN_JSON"
+emit_json
 echo "END_JSON"
+
+# Also save to a file in WORK_DIR so beginners can grab it via File
+# Station / SMB without copy-pasting from a terminal.
+JSON_FILE="$WORK_DIR/bench_result_$(date +%Y%m%d-%H%M%S).json"
+if emit_json > "$JSON_FILE" 2>/dev/null; then
+    echo
+    echo "JSON summary also saved to: $JSON_FILE"
+    echo "  (open it with File Station or copy via SMB and send it to the chat)"
+fi
 
 rm -f "$SUMMARY_FILE"
 exit 0
