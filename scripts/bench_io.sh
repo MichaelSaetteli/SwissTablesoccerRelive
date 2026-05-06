@@ -143,66 +143,235 @@ else
     record drop_caches no
 fi
 
-# ---- Volumes ----
-section "Volumes (df -hT)"
-df -hT 2>/dev/null \
-    | awk 'NR==1 || $7 ~ /^\/volume[0-9]+/ { print }' \
-    || df -h
-volumes=$(df --output=target -P 2>/dev/null \
-    | awk '/^\/volume[0-9]+/ {print $1}' \
-    | tr '\n' ',' | sed 's/,$//')
-record volumes "$volumes"
+# ---- DSM / Synology model ----
+section "DSM / Synology model"
+if [ -r /etc.defaults/VERSION ]; then
+    grep -E '^(productversion|buildnumber|smallfixnumber|os_name|builddate)=' /etc.defaults/VERSION 2>/dev/null
+    record dsm_version "$(awk -F\" '/^productversion=/ {print $2}' /etc.defaults/VERSION 2>/dev/null)"
+    record dsm_build   "$(awk -F\" '/^buildnumber=/ {print $2}' /etc.defaults/VERSION 2>/dev/null)"
+fi
+if [ -r /proc/sys/kernel/syno_hw_version ]; then
+    model=$(cat /proc/sys/kernel/syno_hw_version)
+    echo "Hardware model  : $model"
+    record syno_hw_version "$model"
+fi
+echo "Kernel          : $(uname -r)"
+record kernel "$(uname -r)"
+
+# ---- Volumes (size, free, fstype, mount opts) ----
+section "Volumes detail"
+volumes_csv=""
+for vol in $(df -P 2>/dev/null | awk '/^\/dev/ && $6 ~ /^\/volume[0-9]+$/ {print $6}' | sort -u); do
+    fstype=$(df -PT "$vol" 2>/dev/null | awk 'NR==2 {print $2}')
+    total_kb=$(df -P "$vol" | awk 'NR==2 {print $2}')
+    used_kb=$(df -P "$vol"  | awk 'NR==2 {print $3}')
+    free_kb=$(df -P "$vol"  | awk 'NR==2 {print $4}')
+    total_gb=$(awk -v k="$total_kb" 'BEGIN { printf "%.1f", k/1024/1024 }')
+    used_gb=$(awk -v k="$used_kb"  'BEGIN { printf "%.1f", k/1024/1024 }')
+    free_gb=$(awk -v k="$free_kb"  'BEGIN { printf "%.1f", k/1024/1024 }')
+    pct=$(awk -v u="$used_kb" -v t="$total_kb" \
+        'BEGIN { if (t>0) printf "%.0f", u*100/t; else print "0" }')
+    mount_opts=$(awk -v m="$vol" '$2==m {print $4; exit}' /proc/mounts 2>/dev/null)
+    backing=$(awk -v m="$vol" '$2==m {print $1; exit}' /proc/mounts 2>/dev/null)
+
+    printf '  %-12s fs=%-7s size=%8s GB  free=%8s GB (%s%% used)\n' \
+        "$vol" "$fstype" "$total_gb" "$free_gb" "$pct"
+    printf '  %-12s backing=%s\n' "" "$backing"
+    printf '  %-12s mount opts=%s\n' "" "${mount_opts:-(none)}"
+
+    key=$(echo "$vol" | tr '/' '_' | sed 's/^_//')   # /volume1 -> volume1
+    record "vol_${key}_fstype"     "$fstype"
+    record "vol_${key}_total_gb"   "$total_gb"
+    record "vol_${key}_used_gb"    "$used_gb"
+    record "vol_${key}_free_gb"    "$free_gb"
+    record "vol_${key}_pct_used"   "$pct"
+    record "vol_${key}_backing"    "$backing"
+    record "vol_${key}_mount_opts" "$mount_opts"
+    volumes_csv="${volumes_csv}${vol},"
+done
+record volumes "${volumes_csv%,}"
+
+# ---- Shared folders inside the volumes (size + file count) ----
+section "Shared folders (top-level dirs per volume)"
+for vol in $(echo "${volumes_csv%,}" | tr ',' '\n'); do
+    [ -d "$vol" ] || continue
+    for entry in "$vol"/*; do
+        [ -d "$entry" ] || continue
+        name=$(basename "$entry")
+        # Skip Synology-internal hidden folders
+        case "$name" in
+            \@*|@*|.*|"#recycle") continue ;;
+        esac
+        size_kb=$(du -sk "$entry" 2>/dev/null | awk '{print $1}')
+        size_gb=$(awk -v k="${size_kb:-0}" 'BEGIN { printf "%.1f", k/1024/1024 }')
+        file_count=$(find "$entry" -maxdepth 4 -type f 2>/dev/null | wc -l | tr -d ' ')
+        printf '  %-50s %8s GB  %8s files\n' "$entry" "$size_gb" "$file_count"
+        # Sanitize the path into a JSON-safe key
+        key=$(echo "$entry" | tr '/' '_' | tr -cd 'A-Za-z0-9_')
+        record "share_${key}_size_gb" "$size_gb"
+        record "share_${key}_files"   "$file_count"
+    done
+done
 
 # ---- RAID ----
-section "RAID (mdstat)"
+section "RAID arrays (mdstat)"
 if [ -f /proc/mdstat ]; then
     cat /proc/mdstat
-    md_count=$(grep -c '^md' /proc/mdstat || echo 0)
+    md_count=$(grep -c '^md' /proc/mdstat 2>/dev/null || echo 0)
     record md_devices "$md_count"
+    # Per-array assembly (which physical drives back which md device)
+    for md in $(grep '^md' /proc/mdstat | awk '{print $1}'); do
+        members=$(grep "^$md" /proc/mdstat | sed -E 's/.*: active raid[0-9]+ //' \
+            | awk '{$1=$1}1')
+        record "md_${md}_members" "$members"
+    done
 else
     echo "(no /proc/mdstat)"
     record md_devices "0"
 fi
 
-# ---- Block devices ----
-section "Block devices"
-if command -v lsblk >/dev/null 2>&1; then
-    lsblk -d -o NAME,SIZE,ROTA,MODEL 2>/dev/null || lsblk
-else
-    cat /proc/partitions
+# ---- Drive details (HDD vs SSD, model, size) ----
+section "Physical drives"
+for dev in $(ls /sys/block 2>/dev/null | grep -E '^(sd|hd|nvme|mmc)' ); do
+    rota=$(cat /sys/block/$dev/queue/rotational 2>/dev/null)
+    type=$([ "$rota" = "0" ] && echo "SSD" || echo "HDD")
+    size_b=$(cat /sys/block/$dev/size 2>/dev/null)
+    [ -z "$size_b" ] && continue
+    size_gb=$(awk -v s="$size_b" 'BEGIN { printf "%.0f", s*512/1024/1024/1024 }')
+    model=$(cat /sys/block/$dev/device/model 2>/dev/null | tr -s ' ' | sed 's/ *$//')
+    serial=$(cat /sys/block/$dev/device/serial 2>/dev/null | tr -s ' ' | sed 's/ *$//')
+    printf '  /dev/%-6s %3s  size=%6s GB  model=%-30s\n' "$dev" "$type" "$size_gb" "${model:-?}"
+    record "drive_${dev}_type"   "$type"
+    record "drive_${dev}_size_gb" "$size_gb"
+    record "drive_${dev}_model"   "${model:-unknown}"
+    record "drive_${dev}_serial"  "${serial:-unknown}"
+done
+
+# ---- SMART status (drive health) ----
+if command -v smartctl >/dev/null 2>&1; then
+    section "SMART health"
+    for dev in /dev/sd? /dev/nvme?n? ; do
+        [ -e "$dev" ] || continue
+        # -H = quick health summary, fast
+        out=$(smartctl -H "$dev" 2>/dev/null | tail -5)
+        result=$(echo "$out" | awk -F': *' '/result|status/ {print $NF}' | head -1)
+        printf '  %-12s %s\n' "$dev" "${result:-unknown}"
+        devname=$(basename "$dev")
+        record "smart_${devname}" "${result:-unknown}"
+    done
 fi
 
-# ---- CPU + RAM ----
-section "Hardware summary"
+# ---- CPU + RAM + load ----
+section "Compute + memory"
 if [ -f /proc/cpuinfo ]; then
     cores=$(grep -c '^processor' /proc/cpuinfo)
     cpu_model=$(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo)
-    echo "CPU             : $cpu_model ($cores cores)"
+    echo "CPU              : $cpu_model ($cores cores)"
     record cpu_cores "$cores"
+    record cpu_model "$cpu_model"
 fi
 if [ -f /proc/meminfo ]; then
-    mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-    mem_gb=$(awk -v k="$mem_kb" 'BEGIN { printf "%.1f", k / 1024 / 1024 }')
-    echo "RAM             : ${mem_gb} GB"
-    record mem_gb "$mem_gb"
+    mem_total_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+    mem_avail_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+    cached_kb=$(awk '/^Cached:/ {print $2; exit}' /proc/meminfo)
+    swap_total_kb=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
+    swap_free_kb=$(awk '/^SwapFree:/ {print $2}' /proc/meminfo)
+    gb() { awk -v k="$1" 'BEGIN { printf "%.1f", k/1024/1024 }'; }
+    echo "RAM total        : $(gb "$mem_total_kb") GB"
+    echo "RAM available    : $(gb "$mem_avail_kb") GB"
+    echo "Page cache       : $(gb "$cached_kb") GB"
+    echo "Swap free / total: $(gb "$swap_free_kb") / $(gb "$swap_total_kb") GB"
+    record mem_total_gb     "$(gb "$mem_total_kb")"
+    record mem_available_gb "$(gb "$mem_avail_kb")"
+    record swap_total_gb    "$(gb "$swap_total_kb")"
+fi
+if [ -f /proc/loadavg ]; then
+    load=$(awk '{print $1, $2, $3}' /proc/loadavg)
+    echo "Load avg (1/5/15): $load"
+    record loadavg "$load"
+fi
+if [ -f /proc/uptime ]; then
+    up=$(awk '{print int($1/86400)" days, "int(($1%86400)/3600)"h"int(($1%3600)/60)"m"}' /proc/uptime)
+    echo "Uptime           : $up"
+    record uptime "$up"
 fi
 
-# ---- Network ----
+# ---- Network interfaces ----
 section "Network interfaces"
 if command -v ethtool >/dev/null 2>&1; then
-    for iface in $(ls /sys/class/net 2>/dev/null | grep -v lo); do
+    for iface in $(ls /sys/class/net 2>/dev/null | grep -v -E '^(lo|sit|tun|tap|veth|docker|br-|virbr)'); do
         speed=$(ethtool "$iface" 2>/dev/null | awk -F': ' '/Speed/ {print $2}')
         link=$(ethtool "$iface" 2>/dev/null | awk -F': ' '/Link detected/ {print $2}')
-        printf '  %-10s speed=%-12s link=%s\n' "$iface" "${speed:-?}" "${link:-?}"
+        mtu=$(cat /sys/class/net/$iface/mtu 2>/dev/null)
+        printf '  %-10s speed=%-12s link=%-4s  mtu=%s\n' \
+            "$iface" "${speed:-?}" "${link:-?}" "${mtu:-?}"
         record "iface_${iface}_speed" "${speed:-unknown}"
         record "iface_${iface}_link"  "${link:-unknown}"
+        record "iface_${iface}_mtu"   "${mtu:-unknown}"
     done
 else
-    echo "(ethtool not installed - skipping speed check)"
+    echo "(ethtool not installed)"
     ip link 2>/dev/null || cat /proc/net/dev
 fi
 
-# ---- Disk space sanity ----
+# ---- Existing pipeline directories ----
+section "Pipeline directories on this NAS"
+found_any=0
+# Check each volume + every shared folder inside it for our 7 expected dirs.
+for vol in $(echo "${volumes_csv%,}" | tr ',' '\n'); do
+    [ -d "$vol" ] || continue
+    for parent in "$vol" "$vol"/*; do
+        [ -d "$parent" ] || continue
+        for sub in eingang_doppel eingang_einzel work_doppel work_einzel \
+                   output_doppel output_einzel logs ; do
+            path="$parent/$sub"
+            if [ -d "$path" ]; then
+                size_kb=$(du -sk "$path" 2>/dev/null | awk '{print $1}')
+                size_gb=$(awk -v k="${size_kb:-0}" 'BEGIN { printf "%.1f", k/1024/1024 }')
+                count=$(find "$path" -type f 2>/dev/null | wc -l | tr -d ' ')
+                printf '  %-55s %7s GB  %6s files\n' "$path" "$size_gb" "$count"
+                found_any=1
+            fi
+        done
+    done
+done
+if [ "$found_any" = "0" ]; then
+    echo "  (no pipeline directories found yet - first deployment)"
+fi
+record pipeline_dirs_present "$found_any"
+
+# ---- Docker / container status ----
+section "Docker / containers"
+if command -v docker >/dev/null 2>&1; then
+    if docker ps --format '{{.Names}} {{.Status}} {{.Image}}' 2>/dev/null | head -20; then
+        running_count=$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')
+        echo
+        echo "Running containers: $running_count"
+        record docker_running "$running_count"
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^video-pipeline$'; then
+            record video_pipeline_running yes
+        else
+            record video_pipeline_running no
+        fi
+    else
+        echo "(docker CLI present but daemon not reachable)"
+        record docker_running 0
+    fi
+else
+    echo "(docker CLI not in PATH - is Container Manager installed?)"
+    record docker_available no
+fi
+
+# ---- Recent disk-related kernel messages ----
+section "Recent disk/RAID kernel events (last 15 lines)"
+if dmesg 2>/dev/null | head -1 >/dev/null; then
+    dmesg 2>/dev/null | grep -iE 'error|fail|md/raid|reset|hang|i/o error|EXT4-fs|btrfs.*error' \
+        | tail -15 || true
+else
+    echo "  (dmesg requires root or is restricted)"
+fi
+
+# ---- Disk space sanity (specific to WORK_DIR) ----
 section "Disk-space pre-check"
 need_mb=$((SIZE_GB * 1024 * 12))   # ~12x size to safely run all tests
 free_kb=$(df -P "$WORK_DIR" | awk 'NR==2 {print $4}')
@@ -348,7 +517,7 @@ printf '  N=1:%6s | N=2:%6s | N=4:%6s | N=8:%6s\n' "$n1" "$n2" "$n4" "$n8"
 echo
 
 # Volume-split hint
-if [ "$(echo "$volumes" | tr ',' '\n' | wc -l)" -lt 2 ]; then
+if [ "$(echo "${volumes_csv%,}" | tr ',' '\n' | grep -c .)" -lt 2 ]; then
     echo "Hint: only one /volume detected. Splitting work + output across"
     echo "      two volumes typically gives a 2-3x ffmpeg speedup."
     record hint_split_volumes yes

@@ -9,6 +9,8 @@ Measures the four numbers that drive `ffmpeg.max_workers` tuning and the
 
 ### What it measures
 
+**I/O benchmarks**
+
 | Test | Purpose |
 |---|---|
 | Sequential write (1 stream) | baseline single-stream throughput |
@@ -16,8 +18,25 @@ Measures the four numbers that drive `ffmpeg.max_workers` tuning and the
 | Parallel writes N=1,2,4,8   | scaling curve - tells us where adding workers stops helping |
 | Concurrent read+write       | simulates real ffmpeg load (read inputs, write output) |
 
-Plus an inventory snapshot (volumes, RAID, network, RAM) so we can see
-whether you have one volume or several, which RAID type, etc.
+**System inventory** (no measurements - read-only checks)
+
+| Section | What we learn |
+|---|---|
+| DSM / Synology model       | DSM version + hardware revision, kernel |
+| Volumes detail             | `/volume*` size + free + filesystem (ext4 vs btrfs) + mount opts |
+| Shared folders             | top-level dirs per volume with size + file count |
+| RAID arrays                | type per md device + which physical drives back it |
+| Physical drives            | per-disk: HDD vs SSD, size, model |
+| SMART health               | drive-by-drive PASSED/FAILED status |
+| Compute + memory           | CPU model + cores, RAM total/available, load avg, uptime |
+| Network interfaces         | per-NIC speed (10 GbE check), link state, MTU |
+| Pipeline directories       | which `eingang_*`, `work_*`, `output_*`, `logs/` already exist + how full |
+| Docker / containers        | running containers, whether `video-pipeline` is up |
+| Recent kernel events       | last 15 disk/RAID errors from dmesg (if accessible) |
+
+Together this gives a full picture: where you have free space, whether
+your 10 GbE link is actually negotiating 10 Gbit/s, how the volumes are
+laid out, whether a previous pipeline run left data behind, etc.
 
 ### Usage on the NAS
 
