@@ -1,5 +1,7 @@
 # Video-Pipeline NAS
 
+[![CI](https://github.com/MichaelSaetteli/SwissTablesoccerRelive/actions/workflows/ci.yml/badge.svg)](https://github.com/MichaelSaetteli/SwissTablesoccerRelive/actions/workflows/ci.yml)
+
 Halbautomatische Pipeline fuer Schweizer Tischfussball-Aufnahmen (Doppel +
 Einzel) auf einer Synology DS1522+. Ueberwacht zwei SMB-Eingangsordner,
 schneidet die MP4s mit FFmpeg zu fertigen Match-Videos zusammen und laedt
