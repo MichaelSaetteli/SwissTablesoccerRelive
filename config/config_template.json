@@ -1,13 +1,13 @@
 {
-  "_comment": "Vorlage fuer config_doppel.json / config_einzel.json. Kopiere diese Datei und fuelle alle Werte aus. Keine Kommentare im echten JSON belassen.",
+  "_comment": "Vorlage fuer config_doppel.json / config_einzel.json. Kopiere diese Datei nach /volume1/SDD/video-pipeline-config/ und fuelle alle Werte aus. Keine Kommentare im echten JSON belassen.",
   "discipline": "Doppel",
   "enabled": true,
   "paths": {
-    "_comment": "Pfade aus Sicht des Containers. /volume1/video-pipeline auf dem NAS wird in /data im Container gemounted (siehe docker-compose.yml).",
-    "eingang": "/data/eingang_doppel",
-    "work": "/data/work_doppel",
-    "output": "/data/output_doppel",
-    "logs": "/data/logs"
+    "_comment": "Pfade aus Sicht des Containers - DS1522+ Layout: SSD fuer alle Hot-Pfade, HDD nur fuer logs (langlebige Artefakte) und das Archiv (Auftrag 5).",
+    "eingang": "/volume1/SDD/eingang_doppel",
+    "work": "/volume1/SDD/work_doppel",
+    "output": "/volume1/SDD/output_doppel",
+    "logs": "/volume3/HDD11TB/pipeline_logs"
   },
   "filename_constants": {
     "_comment": "Schema: {jahr} {sts_nummer} {tischnummer} {turniername} {disziplin} [{part}].mp4. tischnummer wird aus dem Ordnernamen abgeleitet (ET01 -> T01). Bei Splits (>24 MP4s) wird part automatisch durch 'Part 1', 'Part 2' ... ersetzt.",

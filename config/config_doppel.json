@@ -2,10 +2,10 @@
   "discipline": "Doppel",
   "enabled": true,
   "paths": {
-    "eingang": "/data/eingang_doppel",
-    "work": "/data/work_doppel",
-    "output": "/data/output_doppel",
-    "logs": "/data/logs"
+    "eingang": "/volume1/SDD/eingang_doppel",
+    "work": "/volume1/SDD/work_doppel",
+    "output": "/volume1/SDD/output_doppel",
+    "logs": "/volume3/HDD11TB/pipeline_logs"
   },
   "filename_constants": {
     "jahr": "2026",
