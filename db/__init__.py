@@ -26,6 +26,18 @@ from .runs import (
     record_phase,
     start_run,
 )
+from .control import (
+    RESTARTABLE_PHASES,
+    RestartTarget,
+    clear_phases_for_restart,
+    is_paused,
+    list_jobs,
+    mark_restart_started,
+    resolve_restart_target,
+    set_paused,
+    set_run_paused,
+    set_run_priority,
+)
 
 __all__ = [
     "open_db", "ensure_schema", "db_path_for",
@@ -34,4 +46,8 @@ __all__ = [
     "list_tournaments", "set_active_tournament", "update_tournament",
     "PhaseTiming", "Run", "finish_run", "list_runs",
     "record_phase", "start_run",
+    "RESTARTABLE_PHASES", "RestartTarget",
+    "clear_phases_for_restart", "is_paused", "list_jobs",
+    "mark_restart_started", "resolve_restart_target",
+    "set_paused", "set_run_paused", "set_run_priority",
 ]

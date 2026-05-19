@@ -59,12 +59,16 @@ CREATE TABLE IF NOT EXISTS runs (
     output_bytes    INTEGER DEFAULT 0,
     output_filename TEXT    DEFAULT '',
     error           TEXT,
+    -- M2: priority + paused flag enable manual queue control.
+    priority        INTEGER NOT NULL DEFAULT 50,
+    paused          INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (tournament_id) REFERENCES tournaments(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_tournament ON runs(tournament_id);
 CREATE INDEX IF NOT EXISTS idx_runs_discipline ON runs(discipline);
 CREATE INDEX IF NOT EXISTS idx_runs_started    ON runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_runs_priority   ON runs(priority);
 
 CREATE TABLE IF NOT EXISTS run_phases (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +81,14 @@ CREATE TABLE IF NOT EXISTS run_phases (
 );
 
 CREATE INDEX IF NOT EXISTS idx_run_phases_run ON run_phases(run_id);
+
+-- M2: one row per discipline holding manual-control flags.
+-- 'paused=1' makes run_pipeline refuse to start until resumed.
+CREATE TABLE IF NOT EXISTS pipeline_control (
+    discipline TEXT PRIMARY KEY,
+    paused     INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT    NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS archives (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,8 +141,25 @@ def open_db(path: Path) -> sqlite3.Connection:
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Idempotent: create all tables/indexes if missing."""
+    """Idempotent: create all tables/indexes if missing, then run migrations.
+
+    SQLite's ``CREATE TABLE IF NOT EXISTS`` does not add new columns to
+    an existing table, so we follow up with ``ALTER TABLE ... ADD COLUMN``
+    for any column an older deployment may not yet have. Each ALTER is
+    guarded by a PRAGMA check so we stay idempotent.
+    """
     conn.executescript(SCHEMA_SQL)
+
+    # ---- Migration: M2 adds priority + paused on runs ----
+    existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+    if "priority" not in existing_cols:
+        conn.execute(
+            "ALTER TABLE runs ADD COLUMN priority INTEGER NOT NULL DEFAULT 50"
+        )
+    if "paused" not in existing_cols:
+        conn.execute(
+            "ALTER TABLE runs ADD COLUMN paused INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -138,11 +167,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 def _reset_connections_for_tests() -> None:
-    """Drop the global connection cache. Only used by pytest fixtures."""
+    """Clear the global connection cache without closing the connections.
+
+    Background daemon threads (e.g. bulk-restart workers) may still hold
+    references and call ``.execute`` after teardown - closing the cache
+    here would race them and raise ``sqlite3.ProgrammingError``. Letting
+    Python's GC reclaim the connection once nothing references it (the
+    tmp_path DB file is deleted with the test) is both safe and silent.
+    """
     with _conn_lock:
-        for conn in _connections.values():
-            try:
-                conn.close()
-            except Exception:
-                pass
         _connections.clear()
