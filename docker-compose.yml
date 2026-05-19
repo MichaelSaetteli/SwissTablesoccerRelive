@@ -1,15 +1,19 @@
 # Synology DS1522+ deployment.
 #
-# Volume layout (briefing s.2):
-#   /volume1/video-pipeline/  on the host  ->  /data/  inside the container
-#   Configs live at /data/config_doppel.json and /data/config_einzel.json.
-#   Eingang/work/output/logs subdirs sit alongside.
+# Volume layout: three shared folders across three volumes -
+#   /volume1/SDD/...     SSD - hot path: configs, work_*, eingang_*, output_*
+#   /volume2/HDD12TB/... HDD - archive after YouTube upload
+#   /volume3/HDD11TB/... HDD - secondary archive / backups
+#
+# All three volumes are mounted so configs can reference any
+# /volume[1-3]/<share>/... path without further compose edits.
 #
 # Before `docker compose up -d`:
-#   * copy/edit config_doppel.json + config_einzel.json into
-#     /volume1/video-pipeline/ (paths inside MUST start with /data/)
-#   * set WEB_PASSWORD and WEB_SECRET_KEY in this file (or in an .env)
-#   * (later) drop youtube_token.json next to the configs
+#   * place config_doppel.json + config_einzel.json in
+#     /volume1/SDD/video-pipeline-config/
+#   * generate WEB_PASSWORD and WEB_SECRET_KEY (do NOT commit the real
+#     values - use an .env file or DSM Container Manager UI)
+#   * (later) drop youtube_oauth.json next to the configs
 
 services:
   video-pipeline:
@@ -18,22 +22,44 @@ services:
     container_name: video-pipeline
     restart: unless-stopped
     init: true
+
+    # Container runs as root to side-step the uid mismatch between the
+    # Dockerfile's "pipeline" user (uid 1000) and Synology's shared-
+    # folder ownership. Without this the watcher cannot mkdir into the
+    # mounted /volume1/SDD/work_* directories.
+    user: root
+
     ports:
-      - "5000:5000"
+      # Port 5000 and 5001 are reserved by DSM on the DS1522+. Use 8080
+      # by default; override per-host via the WEB_PORT env var if needed.
+      - "${WEB_PORT:-8080}:5000"
+
     volumes:
-      - /volume1/video-pipeline:/data
+      - /volume1:/volume1
+      - /volume2:/volume2
+      - /volume3:/volume3
+
     environment:
       TZ: Europe/Zurich
+
       # ---- web auth ----
-      WEB_USERNAME: admin
       # IMPORTANT: change before deployment. Sessions are signed with
       # WEB_SECRET_KEY - rotating it logs everyone out.
+      WEB_USERNAME: admin
       WEB_PASSWORD: changeme
       WEB_SECRET_KEY: please-set-me
+
       # ---- runtime ----
-      VIDEO_PIPELINE_DATA_DIR: /data
+      # Config + status JSONs live on the SSD for fast reads.
+      VIDEO_PIPELINE_DATA_DIR: /volume1/SDD/video-pipeline-config
       # Set to "0" to run the web UI without auto-triggering pipelines.
       ENABLE_WATCHER: "1"
+
+      # tini reaps grandchildren spawned by ffmpeg subprocesses so the
+      # container stays clean even under repeated pipeline runs.
+      TINI_SUBREAPER: "1"
+      TMPDIR: /tmp
+
     # Liveness check - the /login page is unauthenticated and cheap.
     healthcheck:
       test:
@@ -43,4 +69,4 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 30s

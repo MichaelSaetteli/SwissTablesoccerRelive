@@ -41,5 +41,10 @@ Thumbs.db
 /output_doppel/
 /output_einzel/
 /logs/
+/install_logs/
 config/status_*.json
 status_*.json
+upload_status_*.json
+config/upload_status_*.json
+youtube_token.json
+client_secrets.json
