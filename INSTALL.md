@@ -88,8 +88,9 @@ Beispiel-Configs aus dem Repo ins `/data`-Verzeichnis kopieren und
 anpassen:
 
 ```bash
-cp config/config_doppel.json /volume1/video-pipeline/config_doppel.json
-cp config/config_einzel.json /volume1/video-pipeline/config_einzel.json
+mkdir -p /volume1/SDD/video-pipeline-config
+cp config/config_doppel.json /volume1/SDD/video-pipeline-config/config_doppel.json
+cp config/config_einzel.json /volume1/SDD/video-pipeline-config/config_einzel.json
 ```
 
 In jeder Datei:
@@ -98,28 +99,57 @@ In jeder Datei:
   passen die Standardwerte fuer die Output-Dateinamen an. Diese koennen
   spaeter auch komfortabel ueber das Web-Interface aenderbar gemacht
   werden ("Datei-Benennung"-Sektion).
-* `paths.*` muss auf `/data/...` zeigen (NICHT `/volume1/...`) - das ist
-  die Sicht aus dem Container.
+* `paths.*` zeigt auf absolute Synology-Volume-Pfade. Default-Layout
+  (SSD fuer Hot-Path, HDD fuer Logs):
+  * `eingang/work/output` -> `/volume1/SDD/eingang_*`, `work_*`, `output_*`
+  * `logs` -> `/volume3/HDD11TB/pipeline_logs` (langlebige FFmpeg-Stderr-Logs)
+* `docker-compose.yml` mountet `/volume1`, `/volume2`, `/volume3` als
+  identische Pfade in den Container, d.h. die Pfade in der Config gelten
+  1:1 sowohl auf dem Host als auch im Container.
 * `enabled: false` setzen, wenn die jeweilige Disziplin gerade nicht
   produziert wird (Tab erscheint dann grau).
 
 ---
 
-## 7. docker-compose.yml: Passwoerter setzen
+## 7. Secrets in `.env` setzen (NICHT in docker-compose.yml)
 
-In `docker-compose.yml` die folgenden Felder anpassen:
-
-```yaml
-environment:
-  WEB_USERNAME: admin              # gewuenschter Login-Name
-  WEB_PASSWORD: <starkes-passwort> # ZWINGEND aendern!
-  WEB_SECRET_KEY: <zufaelliger-string-mind-32-zeichen>
-```
-
-`WEB_SECRET_KEY` mit einem zufaelligen Wert generieren:
+Die `docker-compose.yml` im Repo ist generisch und wird **nie vom
+Operator editiert** - sonst kollidiert sie beim naechsten `git pull`.
+Stattdessen werden alle Secrets in einer `.env` neben der Compose-Datei
+abgelegt, die per `.gitignore` ausgeschlossen ist.
 
 ```bash
-python3 -c "import secrets; print(secrets.token_hex(32))"
+cd /volume1/SDD/projects/SwissTablesoccerRelive
+cp .env.example .env
+# Datei mit einem Texteditor oeffnen, WEB_PASSWORD und WEB_SECRET_KEY setzen
+```
+
+Werte generieren (auf dem Laptop oder via DSM Aufgabenplaner):
+
+```bash
+echo "WEB_PASSWORD=$(openssl rand -base64 18)"
+echo "WEB_SECRET_KEY=$(openssl rand -hex 32)"
+```
+
+docker compose liest `.env` automatisch beim `up`. Wenn `WEB_PASSWORD`
+oder `WEB_SECRET_KEY` fehlen, schlaegt der Start **fail-fast** mit
+einer klaren Fehlermeldung statt mit `changeme` weiterzulaufen.
+
+### Migration vom alten Setup
+
+Falls deine NAS bereits eine modifizierte `docker-compose.yml` enthaelt
+(z.B. mit dem echten Passwort eingebaut), einmalig:
+
+```bash
+cd /volume1/SDD/projects/SwissTablesoccerRelive
+# 1. Aktuelle Passwoerter aus der lokalen Datei extrahieren
+grep -E "WEB_(USERNAME|PASSWORD|SECRET_KEY)" docker-compose.yml \
+  | awk -F': ' '{print $1"="$2}' > .env
+# 2. Lokale Edits verwerfen, repo-Stand uebernehmen
+git checkout docker-compose.yml
+# 3. Jetzt klappt git pull immer
+git pull
+docker compose build && docker compose up -d
 ```
 
 ---
@@ -136,8 +166,8 @@ docker compose logs -f       # zum Mitschauen, Ctrl-C beendet das Tailing
 Die Logs sollten zeigen:
 
 ```
-[watcher] Doppel: started on /data/eingang_doppel
-[watcher] Einzel: started on /data/eingang_einzel
+[watcher] Doppel: started on /volume1/SDD/eingang_doppel
+[watcher] Einzel: started on /volume1/SDD/eingang_einzel
 [web] waitress serving on http://0.0.0.0:5000
 ```
 

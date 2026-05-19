@@ -20,9 +20,12 @@ TEST_PASS = "secret"
 
 @pytest.fixture(autouse=True)
 def _isolated_db():
+    from web.services import _reset_storage_watchers_for_tests
     _reset_connections_for_tests()
+    _reset_storage_watchers_for_tests()
     yield
     _reset_connections_for_tests()
+    _reset_storage_watchers_for_tests()
 
 
 @pytest.fixture

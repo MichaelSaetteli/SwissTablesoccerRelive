@@ -444,6 +444,16 @@ def get_storage_watcher(volume_paths: List[Path]):
     return w
 
 
+def _reset_storage_watchers_for_tests() -> None:
+    """Stop + clear all cached watchers. Only used by pytest fixtures."""
+    for w in list(_storage_watcher_cache.values()):
+        try:
+            w.stop()                                           # type: ignore[attr-defined]
+        except Exception:
+            pass
+    _storage_watcher_cache.clear()
+
+
 def get_storage_snapshot(volume_paths: List[Path]) -> Dict[str, object]:
     watcher = get_storage_watcher(volume_paths)
     return watcher.snapshot().to_dict()
