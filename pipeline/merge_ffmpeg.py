@@ -168,7 +168,9 @@ def merge_folder(
 
     output_name = build_output_filename(config.filename_constants, folder.name)
     final_path = output_dir / output_name
-    partial_path = output_dir / f".{output_name}.partial"
+    # Partial keeps the .mp4 extension so ffmpeg can auto-detect the
+    # muxer; leading dot hides it from File Station / glob("*.mp4").
+    partial_path = output_dir / f".{final_path.stem}.partial{final_path.suffix}"
 
     concat_list = write_concat_list(folder, files)
     cmd = build_ffmpeg_command(concat_list, partial_path)

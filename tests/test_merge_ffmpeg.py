@@ -137,9 +137,11 @@ def test_merge_folder_calls_runner_with_expected_argv(
     assert len(runner.calls) == 1
     cmd = runner.calls[0]
     assert cmd[0] == "ffmpeg"
-    # Atomic write: ffmpeg targets a hidden ``.<name>.partial`` file
-    # which is renamed to result.output only after a clean exit.
-    assert cmd[-1].endswith(f".{expected_name}.partial")
+    # Atomic write: ffmpeg targets a hidden ``.<stem>.partial.mp4`` file
+    # (keeping the .mp4 suffix so ffmpeg can auto-detect the muxer).
+    # Only after a clean exit does it get renamed to result.output.
+    stem = expected_name[:-len(".mp4")]
+    assert cmd[-1].endswith(f".{stem}.partial.mp4")
     assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
     assert result.output.is_file()  # rename succeeded
     assert not Path(cmd[-1]).exists()  # partial cleaned up
