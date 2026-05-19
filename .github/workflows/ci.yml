@@ -71,10 +71,18 @@ jobs:
       - name: Smoke-import every module
         run: |
           python -c "import pipeline.config_loader, pipeline.merge_ffmpeg, pipeline.organize_folders, pipeline.rename_mp4, pipeline.MoveFiles, pipeline.status_file"
-          python -c "import watcher.folder_watcher, watcher.pipeline_runner, watcher.status"
+          python -c "import watcher.folder_watcher, watcher.pipeline_runner, watcher.status, watcher.storage_watcher"
           python -c "import web.app, web.services, web.auth"
           python -c "import youtube.metadata_builder, youtube.oauth_setup, youtube.upload_status, youtube.youtube_uploader"
+          python -c "import db, db.control, db.runs, db.schema, db.tournaments"
+          python -c "import archive, archive.archiver"
       - name: Validate docker-compose.yml
+        # The compose file uses ${VAR:?...} for secrets so production
+        # cannot start with placeholder values. CI just needs dummy
+        # values to pass config validation.
+        env:
+          WEB_PASSWORD: ci-placeholder
+          WEB_SECRET_KEY: ci-placeholder
         run: docker compose -f docker-compose.yml config -q
       - name: Shellcheck bench_io.sh
         run: |
