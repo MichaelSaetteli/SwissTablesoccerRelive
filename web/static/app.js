@@ -53,9 +53,10 @@
   async function pollState(panel) {
     const discipline = panel.dataset.discipline;
     try {
-      const [stateRes, histRes] = await Promise.all([
+      const [stateRes, histRes, ctrlRes] = await Promise.all([
         fetch(`/api/state/${discipline}`, { credentials: "same-origin" }),
         fetch(`/api/history/${discipline}`, { credentials: "same-origin" }),
+        fetch(`/api/pipeline/${discipline}/control`, { credentials: "same-origin" }),
       ]);
       if (stateRes.ok) {
         const data = await stateRes.json();
@@ -66,6 +67,9 @@
       }
       if (histRes.ok) {
         renderHistory(panel, await histRes.json());
+      }
+      if (ctrlRes.ok) {
+        renderPipelineControl(panel, await ctrlRes.json());
       }
     } catch (e) {
       console.warn("poll failed", e);
@@ -99,7 +103,7 @@
     const runs = payload.runs || [];
     if (runs.length === 0) {
       tbody.innerHTML =
-        '<tr><td colspan="9" class="empty">Noch keine Runs.</td></tr>';
+        '<tr><td colspan="11" class="empty">Noch keine Runs.</td></tr>';
       return;
     }
     const phaseDur = (run, name) => {
@@ -107,18 +111,101 @@
       return p ? p.duration_s.toFixed(2) + 's' : '--';
     };
     tbody.innerHTML = runs.map(r => `
-      <tr class="run-${escapeHtml(r.state)}">
+      <tr class="run-${escapeHtml(r.state)}" data-run-id="${r.id}">
+        <td><input type="checkbox" class="bulk-select" data-run-id="${r.id}"></td>
         <td>${escapeHtml(r.folder_name)}</td>
         <td>${escapeHtml(r.state)}</td>
+        <td><input type="number" class="prio-input" data-run-id="${r.id}"
+                   value="${r.priority ?? 50}" min="0" max="999"
+                   title="Niedriger = hoeher priorisiert"></td>
         <td>${fmtBytes(r.input_bytes)}</td>
         <td>${fmtBytes(r.output_bytes)}</td>
         <td>${phaseDur(r, 'merge')}</td>
         <td>${phaseDur(r, 'move')}</td>
         <td>${phaseDur(r, 'organize')}</td>
         <td>${phaseDur(r, 'rename')}</td>
-        <td>${phaseDur(r, 'merge')}</td>
+        <td>
+          <select class="restart-phase" data-run-id="${r.id}">
+            <option value="merge">Merge</option>
+            <option value="rename">Rename + Merge</option>
+            <option value="output">Output</option>
+          </select>
+          <button class="row-restart" data-run-id="${r.id}">restart</button>
+        </td>
       </tr>
     `).join('');
+
+    // Wire up the per-row controls.
+    const discipline = panel.dataset.discipline;
+    tbody.querySelectorAll('.row-restart').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const rid = btn.dataset.runId;
+        const phase = tbody.querySelector(
+          `.restart-phase[data-run-id="${rid}"]`).value;
+        restartJob(discipline, rid, phase);
+      });
+    });
+    tbody.querySelectorAll('.prio-input').forEach(inp => {
+      let timer = null;
+      inp.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          updateJob(discipline, inp.dataset.runId,
+                    { priority: parseInt(inp.value, 10) });
+        }, 500);   // debounce so we do not POST on every keystroke
+      });
+    });
+    tbody.querySelectorAll('.bulk-select').forEach(cb => {
+      cb.addEventListener('change', () => updateBulkToolbar(panel));
+    });
+
+    updateBulkToolbar(panel);
+  }
+
+  async function restartJob(discipline, runId, fromPhase) {
+    try {
+      const res = await fetch(`/api/jobs/${discipline}/${runId}/restart`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_phase: fromPhase }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(`Restart fehlgeschlagen: ${err.error || res.status}`);
+      }
+    } catch (e) { console.warn('restart failed', e); }
+  }
+
+  async function updateJob(discipline, runId, payload) {
+    await fetch(`/api/jobs/${discipline}/${runId}`, {
+      method: 'PATCH', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  function updateBulkToolbar(panel) {
+    const toolbar = panel.querySelector('[data-bulk-toolbar]');
+    if (!toolbar) return;
+    const checked = panel.querySelectorAll('.bulk-select:checked');
+    const counter = panel.querySelector('[data-bulk-count]');
+    if (counter) counter.textContent = checked.length;
+    toolbar.hidden = checked.length === 0;
+  }
+
+  function renderPipelineControl(panel, pipelineState) {
+    const label = panel.querySelector('[data-field="pipeline_paused_label"]');
+    const pauseBtn = panel.querySelector('[data-action="pipeline-pause"]');
+    const resumeBtn = panel.querySelector('[data-action="pipeline-resume"]');
+    const runBtn = panel.querySelector('[data-action="run"]');
+    const paused = pipelineState && pipelineState.paused;
+    if (label) {
+      label.textContent = paused ? 'pausiert' : 'aktiv';
+      label.classList.toggle('paused', !!paused);
+    }
+    if (pauseBtn)  pauseBtn.hidden  = !!paused;
+    if (resumeBtn) resumeBtn.hidden = !paused;
+    if (runBtn)    runBtn.disabled  = !!paused;
   }
 
   function renderStatus(panel, status) {
@@ -440,6 +527,8 @@
     bindUploadButtons();
     bindFilenameForms();
     bindYoutubeForms();
+    bindPipelineControl();
+    bindBulkRestart();
 
     const panels = Array.from(
       document.querySelectorAll(".tabpanel[data-discipline]")
@@ -663,6 +752,72 @@
       }
       alert("Archivierung gestartet - Status in der Verlaufstabelle.");
       loadArchives();
+    });
+  }
+
+  // ----- M2: Pause/Resume + Bulk Restart --------------------------------
+  function bindPipelineControl() {
+    document.querySelectorAll('[data-action="pipeline-pause"]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const panel = btn.closest('.tabpanel');
+        const discipline = panel.dataset.discipline;
+        await fetch(`/api/pipeline/${discipline}/pause`,
+          { method: 'POST', credentials: 'same-origin' });
+        pollState(panel);
+      });
+    });
+    document.querySelectorAll('[data-action="pipeline-resume"]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const panel = btn.closest('.tabpanel');
+        const discipline = panel.dataset.discipline;
+        await fetch(`/api/pipeline/${discipline}/resume`,
+          { method: 'POST', credentials: 'same-origin' });
+        pollState(panel);
+      });
+    });
+  }
+
+  function bindBulkRestart() {
+    document.querySelectorAll('.tabpanel').forEach(panel => {
+      const selectAll = panel.querySelector('[data-bulk-select-all]');
+      if (selectAll) {
+        selectAll.addEventListener('change', () => {
+          panel.querySelectorAll('.bulk-select').forEach(cb => {
+            cb.checked = selectAll.checked;
+          });
+          updateBulkToolbar(panel);
+        });
+      }
+      const clearBtn = panel.querySelector('[data-action="bulk-clear"]');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          panel.querySelectorAll('.bulk-select').forEach(cb => cb.checked = false);
+          if (selectAll) selectAll.checked = false;
+          updateBulkToolbar(panel);
+        });
+      }
+      const restartBtn = panel.querySelector('[data-action="bulk-restart"]');
+      if (restartBtn) {
+        restartBtn.addEventListener('click', async () => {
+          const discipline = panel.dataset.discipline;
+          const phaseSel = panel.querySelector('[data-bulk-phase]');
+          const phase = phaseSel ? phaseSel.value : 'merge';
+          const ids = Array.from(
+            panel.querySelectorAll('.bulk-select:checked')
+          ).map(cb => parseInt(cb.dataset.runId, 10));
+          if (ids.length === 0) return;
+          if (!confirm(
+            `Restart ${ids.length} Jobs ab Phase "${phase}"?`
+          )) return;
+          await fetch(`/api/jobs/${discipline}/bulk-restart`, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_ids: ids, from_phase: phase }),
+          });
+          if (selectAll) selectAll.checked = false;
+          pollState(panel);
+        });
+      }
     });
   }
 

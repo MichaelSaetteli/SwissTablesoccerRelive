@@ -208,6 +208,108 @@ def api_history(discipline: str):
     return jsonify(services.get_run_history_for(config))
 
 
+# ---- Manual pipeline control (M2: Pause/Resume/Restart/Bulk) ----
+
+@api_bp.route("/pipeline/<discipline>/pause", methods=["POST"])
+@login_required
+def api_pipeline_pause(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    if not services.set_pipeline_paused(config, True):
+        return jsonify({"error": "no DB available - cannot pause"}), 500
+    return jsonify({"discipline": discipline, "paused": True})
+
+
+@api_bp.route("/pipeline/<discipline>/resume", methods=["POST"])
+@login_required
+def api_pipeline_resume(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    if not services.set_pipeline_paused(config, False):
+        return jsonify({"error": "no DB available - cannot resume"}), 500
+    return jsonify({"discipline": discipline, "paused": False})
+
+
+@api_bp.route("/pipeline/<discipline>/control")
+@login_required
+def api_pipeline_control(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    return jsonify({
+        "discipline": discipline,
+        "paused": services.is_pipeline_paused(config),
+    })
+
+
+@api_bp.route("/jobs/<discipline>")
+@login_required
+def api_jobs_list(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    state_filter = request.args.get("states")
+    states = state_filter.split(",") if state_filter else None
+    return jsonify({
+        "jobs": services.list_jobs_for(config, states=states),
+        "paused": services.is_pipeline_paused(config),
+    })
+
+
+@api_bp.route("/jobs/<discipline>/<int:run_id>", methods=["PATCH"])
+@login_required
+def api_job_update(discipline: str, run_id: int):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    payload = request.get_json(silent=True) or {}
+    if not services.update_job_for(config, run_id=run_id, payload=payload):
+        return jsonify({"error": "job not found or invalid payload"}), 404
+    return jsonify({"status": "updated", "run_id": run_id})
+
+
+@api_bp.route("/jobs/<discipline>/<int:run_id>/restart", methods=["POST"])
+@login_required
+def api_job_restart(discipline: str, run_id: int):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    payload = request.get_json(silent=True) or {}
+    from_phase = str(payload.get("from_phase", "merge"))
+    if from_phase not in ("rename", "merge", "output"):
+        return jsonify({
+            "error": f"invalid from_phase {from_phase!r} - "
+                     f"allowed: rename | merge | output"
+        }), 400
+    services.restart_job_async(config, run_id=run_id, from_phase=from_phase)
+    return jsonify({
+        "status": "scheduled", "run_id": run_id, "from_phase": from_phase,
+    }), 202
+
+
+@api_bp.route("/jobs/<discipline>/bulk-restart", methods=["POST"])
+@login_required
+def api_jobs_bulk_restart(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    payload = request.get_json(silent=True) or {}
+    run_ids = payload.get("run_ids") or []
+    if not isinstance(run_ids, list) or not all(isinstance(x, int) for x in run_ids):
+        return jsonify({"error": "run_ids must be a list of ints"}), 400
+    from_phase = str(payload.get("from_phase", "merge"))
+    if from_phase not in ("rename", "merge", "output"):
+        return jsonify({"error": f"invalid from_phase {from_phase!r}"}), 400
+    services.bulk_restart_async(config, run_ids=run_ids, from_phase=from_phase)
+    return jsonify({
+        "status": "scheduled",
+        "count": len(run_ids),
+        "from_phase": from_phase,
+    }), 202
+
+
 # ---- Storage watcher (Dashboard Modul 6.2) ----
 
 @api_bp.route("/storage")

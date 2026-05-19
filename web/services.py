@@ -596,3 +596,121 @@ def list_archives_for(config: PipelineConfig) -> List[Dict[str, object]]:
         "ORDER BY a.started_at DESC LIMIT 50"
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ===========================================================================
+# M2: Manual pipeline control (Pause / Resume / Restart / Bulk)
+# ===========================================================================
+
+def is_pipeline_paused(config: PipelineConfig) -> bool:
+    from db import is_paused, open_db
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return False
+    return is_paused(open_db(db_path), config.discipline)
+
+
+def set_pipeline_paused(
+    config: PipelineConfig, paused: bool,
+) -> bool:
+    from db import open_db, set_paused
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return False
+    set_paused(open_db(db_path), config.discipline, paused)
+    return True
+
+
+def list_jobs_for(
+    config: PipelineConfig,
+    *,
+    states: Optional[List[str]] = None,
+    limit: int = 200,
+) -> List[Dict[str, object]]:
+    """Job-style view of the runs table: state + priority sort."""
+    from db import list_jobs, open_db
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return []
+    return list_jobs(
+        open_db(db_path),
+        discipline=config.discipline, states=states, limit=limit,
+    )
+
+
+def restart_job_async(
+    config: PipelineConfig,
+    *,
+    run_id: int,
+    from_phase: str = "merge",
+) -> threading.Thread:
+    """Spawn a daemon thread that restarts one run.
+
+    The daemon swallows ``PipelineRunError`` so the API can report 202
+    immediately while the operator polls /api/history for the result.
+    """
+    from watcher.pipeline_runner import PipelineRunError, restart_run
+
+    def _target() -> None:
+        try:
+            restart_run(config, run_id, from_phase=from_phase)
+        except PipelineRunError:
+            pass        # error state is already persisted via the writer
+
+    thread = threading.Thread(
+        target=_target,
+        name=f"restart-{config.discipline}-{run_id}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def bulk_restart_async(
+    config: PipelineConfig,
+    *,
+    run_ids: List[int],
+    from_phase: str = "merge",
+) -> threading.Thread:
+    """Restart many runs sequentially. The per-discipline pipeline lock
+    serialises them automatically inside ``restart_run``."""
+    from watcher.pipeline_runner import PipelineRunError, restart_run
+
+    def _target() -> None:
+        for rid in run_ids:
+            try:
+                restart_run(config, rid, from_phase=from_phase)
+            except PipelineRunError:
+                # Keep going - one bad job should not block the bulk run.
+                continue
+
+    thread = threading.Thread(
+        target=_target,
+        name=f"bulk-restart-{config.discipline}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def update_job_for(
+    config: PipelineConfig,
+    *,
+    run_id: int,
+    payload: Dict[str, object],
+) -> bool:
+    """Apply UI-driven mutations to one Run (priority + paused only)."""
+    from db import open_db, set_run_paused, set_run_priority
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return False
+    conn = open_db(db_path)
+    ok = True
+    if "priority" in payload:
+        try:
+            ok = set_run_priority(conn, run_id, int(payload["priority"])) and ok
+        except (TypeError, ValueError):
+            ok = False
+    if "paused" in payload:
+        ok = set_run_paused(conn, run_id, bool(payload["paused"])) and ok
+    return ok

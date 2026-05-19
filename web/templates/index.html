@@ -67,12 +67,24 @@
             <span data-field="history_throughput">--</span> GB/h Ø ·
             <span data-field="history_failed">--</span> Fehler
           </p>
+          <div class="bulk-toolbar" data-bulk-toolbar hidden>
+            <span><strong data-bulk-count>0</strong> ausgewaehlt.</span>
+            Phase:
+            <select data-bulk-phase>
+              <option value="merge">Mergen</option>
+              <option value="rename">Rename + Mergen</option>
+              <option value="output">Output verifizieren</option>
+            </select>
+            <button data-action="bulk-restart">Restart auswaehlen</button>
+            <button data-action="bulk-clear" class="secondary">Auswahl loeschen</button>
+          </div>
           <table class="history-table" data-field="history_rows">
             <thead>
               <tr>
-                <th>Ordner</th><th>Status</th><th>In</th><th>Out</th>
-                <th>Dauer</th><th>Move</th><th>Org</th>
-                <th>Rename</th><th>Merge</th>
+                <th><input type="checkbox" data-bulk-select-all></th>
+                <th>Ordner</th><th>Status</th><th>Prio</th><th>In</th><th>Out</th>
+                <th>Merge</th><th>Move</th><th>Org</th><th>Rename</th>
+                <th>Aktion</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -86,8 +98,18 @@
             Manueller Start ist ein Fallback - normalerweise erkennt der
             Folder-Watcher den Upload automatisch.
           </p>
+          <p class="pipeline-status">
+            Pipeline-Zustand:
+            <strong data-field="pipeline_paused_label">aktiv</strong>
+          </p>
           <button data-action="run" {% if not d.enabled %}disabled{% endif %}>
             Pipeline starten
+          </button>
+          <button data-action="pipeline-pause" class="secondary">
+            Pipeline pausieren
+          </button>
+          <button data-action="pipeline-resume" class="secondary" hidden>
+            Pipeline fortsetzen
           </button>
           <h3>Log</h3>
           <pre class="log" data-field="log_tail"></pre>

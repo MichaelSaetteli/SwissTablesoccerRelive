@@ -296,3 +296,44 @@ progress[data-field] {
   border-radius: 4px;
   margin: 0.75rem 0;
 }
+
+/* M2: pause + bulk + restart UI */
+.pipeline-status { margin: 0 0 0.5rem; font-size: 0.95rem; }
+.pipeline-status .paused { color: var(--error); }
+
+button.secondary {
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+}
+button.secondary:hover { background: #eef6ff; color: var(--primary); }
+button.secondary[hidden] { display: none; }
+
+.bulk-toolbar {
+  background: #fff3cd;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.bulk-toolbar select { padding: 0.2rem 0.4rem; }
+
+.history-table .prio-input { width: 4em; font-size: 0.85rem; }
+.history-table .restart-phase { font-size: 0.8rem; }
+.history-table .row-restart,
+.history-table .restart-phase {
+  margin-left: 0.2rem;
+}
+.history-table .row-restart {
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  font-size: 0.8rem;
+  padding: 0.2rem 0.5rem;
+}
+.history-table .row-restart:hover { background: var(--primary); color: #fff; }
+
+.history-table input[type="checkbox"] { transform: scale(1.1); }
