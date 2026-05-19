@@ -1,5 +1,9 @@
-"""Flask web interface (Step 3 of the build order)."""
+"""Flask web interface (Step 3 of the build order).
 
-from .app import create_app
+Intentionally does NOT eager-import ``app`` here: doing so makes
+``python -m web.app`` trigger a ``RuntimeWarning`` because runpy ends
+up importing ``web.app`` twice (once via this re-export, once as
+``__main__``). Callers should import explicitly::
 
-__all__ = ["create_app"]
+    from web.app import create_app
+"""
