@@ -217,3 +217,82 @@ progress[data-field] {
 .files a { color: var(--primary); text-decoration: none; }
 .files a:hover { text-decoration: underline; }
 .size { color: var(--muted); font-size: 0.85rem; }
+
+/* Dashboard additions (M1) */
+.storage-banner {
+  padding: 0.75rem 1.25rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  font-size: 0.95rem;
+}
+.storage-banner[data-status="warn"]     { background: #fff3cd; color: #6a4d00; }
+.storage-banner[data-status="critical"] { background: #fde2df; color: var(--error); font-weight: 600; }
+
+.tournament-banner-card { background: #eef6ff; }
+.tournament-banner {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.tournament-banner .link {
+  margin-left: 1rem;
+  color: var(--primary);
+  text-decoration: none;
+}
+.tournament-banner .link:hover { text-decoration: underline; }
+
+.history-card .stats {
+  background: #f0f3f8;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  font-weight: 600;
+  margin: 0.4rem 0 0.75rem;
+}
+
+.history-table, .tournaments-table, .archives-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.history-table th, .history-table td,
+.tournaments-table th, .tournaments-table td,
+.archives-table th, .archives-table td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.history-table th, .tournaments-table th, .archives-table th {
+  background: #f0f3f8;
+  font-weight: 600;
+}
+.history-table .empty, .tournaments-table .empty, .archives-table .empty {
+  text-align: center;
+  font-style: italic;
+  color: var(--muted);
+}
+.run-done  { color: var(--ok); }
+.run-error { color: var(--error); font-weight: 600; }
+.run-running { color: var(--primary); }
+
+.volumes-list { list-style: none; padding: 0; }
+.volumes-list li {
+  padding: 0.6rem 0.75rem;
+  border-radius: 4px;
+  margin-bottom: 0.4rem;
+  background: #f0f3f8;
+}
+.volume-warn { background: #fff3cd; }
+.volume-critical { background: #fde2df; color: var(--error); }
+.vstatus {
+  float: right;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.archive-plan-preview {
+  background: #eef6ff;
+  border: 1px solid var(--primary);
+  padding: 0.75rem 1rem;
+  border-radius: 4px;
+  margin: 0.75rem 0;
+}

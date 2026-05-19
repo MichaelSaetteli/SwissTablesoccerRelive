@@ -292,3 +292,297 @@ def start_upload_async(
     )
     thread.start()
     return thread
+
+
+# ===========================================================================
+# Dashboard services (Auftrag 4 M1: Tournaments + Runs + Storage + Archive)
+# ===========================================================================
+
+def _db_path_for(config: PipelineConfig) -> Optional[Path]:
+    """The dashboard DB lives next to the config files."""
+    if config.source_path is None:
+        return None
+    return config.source_path.parent / "runs.db"
+
+
+# ---- Tournaments ----------------------------------------------------------
+
+def list_tournaments_for(config: PipelineConfig) -> List[Dict[str, object]]:
+    """All Tournaments visible to the dashboard, newest first."""
+    from db import open_db, list_tournaments
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return []
+    conn = open_db(db_path)
+    return [t.to_dict() for t in list_tournaments(conn)]
+
+
+def create_tournament_for(
+    config: PipelineConfig, payload: Dict[str, object],
+) -> Optional[Dict[str, object]]:
+    """Insert a Tournament from a UI payload; clean unknown keys."""
+    from db import create_tournament, open_db
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return None
+    conn = open_db(db_path)
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        return None
+    allowed = ("date", "location", "organizer", "disciplines",
+               "youtube_channel", "visibility_default", "video_prefix",
+               "description_template", "tags", "max_workers")
+    clean = {k: payload[k] for k in allowed if k in payload}
+    if "max_workers" in clean:
+        try:
+            clean["max_workers"] = int(clean["max_workers"])
+        except (TypeError, ValueError):
+            del clean["max_workers"]
+    t = create_tournament(conn, name, **clean)
+    return t.to_dict()
+
+
+def update_tournament_for(
+    config: PipelineConfig, tournament_id: int, payload: Dict[str, object],
+) -> Optional[Dict[str, object]]:
+    from db import open_db, update_tournament
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return None
+    conn = open_db(db_path)
+    allowed = ("name", "date", "location", "organizer", "disciplines",
+               "youtube_channel", "visibility_default", "video_prefix",
+               "description_template", "tags", "max_workers")
+    clean = {k: payload[k] for k in allowed if k in payload}
+    if "max_workers" in clean:
+        try:
+            clean["max_workers"] = int(clean["max_workers"])
+        except (TypeError, ValueError):
+            del clean["max_workers"]
+    updated = update_tournament(conn, tournament_id, **clean)
+    return updated.to_dict() if updated else None
+
+
+def set_active_tournament_for(
+    config: PipelineConfig, discipline: str, tournament_id: int,
+) -> bool:
+    """Pin a Tournament as 'active' for *discipline*."""
+    from db import get_tournament, open_db, set_active_tournament
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return False
+    conn = open_db(db_path)
+    if get_tournament(conn, tournament_id) is None:
+        return False
+    set_active_tournament(conn, discipline, tournament_id)
+    return True
+
+
+def get_active_tournament_for(
+    config: PipelineConfig,
+) -> Optional[Dict[str, object]]:
+    from db import get_active_tournament, open_db
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return None
+    conn = open_db(db_path)
+    t = get_active_tournament(conn, config.discipline)
+    return t.to_dict() if t else None
+
+
+# ---- Run history ----------------------------------------------------------
+
+def get_run_history_for(
+    config: PipelineConfig, *, limit: int = 50,
+) -> Dict[str, object]:
+    """Recent runs + simple aggregates for the dashboard."""
+    from db import list_tournaments, open_db
+    from db.runs import list_runs
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return {"runs": [], "stats": {}}
+    conn = open_db(db_path)
+    runs = list_runs(conn, discipline=config.discipline, limit=limit)
+
+    total_in = sum(r.input_bytes for r in runs)
+    total_out = sum(r.output_bytes for r in runs)
+    total_duration_s = 0.0
+    for r in runs:
+        total_duration_s += sum(p.duration_s for p in r.phases)
+    avg_throughput_gbph = (
+        (total_in / 1024 ** 3) / (total_duration_s / 3600)
+        if total_duration_s > 0 else 0.0
+    )
+
+    return {
+        "runs": [r.to_dict() for r in runs],
+        "stats": {
+            "total_runs": len(runs),
+            "total_input_bytes": total_in,
+            "total_output_bytes": total_out,
+            "total_duration_s": round(total_duration_s, 1),
+            "avg_throughput_gbph": round(avg_throughput_gbph, 1),
+            "failed_runs": sum(1 for r in runs if r.state == "error"),
+        },
+    }
+
+
+# ---- Storage --------------------------------------------------------------
+
+_storage_watcher_cache: Dict[str, object] = {}
+
+
+def get_storage_watcher(volume_paths: List[Path]):
+    """Lazy singleton - we want one watcher per process, not one per request."""
+    from watcher.storage_watcher import StorageWatcher
+    key = ",".join(sorted(str(p) for p in volume_paths))
+    w = _storage_watcher_cache.get(key)
+    if w is None:
+        w = StorageWatcher(volume_paths)
+        w.start()
+        _storage_watcher_cache[key] = w
+    return w
+
+
+def get_storage_snapshot(volume_paths: List[Path]) -> Dict[str, object]:
+    watcher = get_storage_watcher(volume_paths)
+    return watcher.snapshot().to_dict()
+
+
+# ---- Archive --------------------------------------------------------------
+
+def build_archive_plan_for(
+    config: PipelineConfig,
+    *,
+    tournament_id: int,
+    archive_root: Path,
+) -> Optional[Dict[str, object]]:
+    """Dry-run plan for the operator's confirmation dialog."""
+    from db import get_tournament, open_db
+    from archive import build_archive_plan
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return None
+    conn = open_db(db_path)
+    t = get_tournament(conn, tournament_id)
+    if t is None:
+        return None
+
+    sources = {
+        config.discipline: {
+            "eingang": config.paths.eingang,
+            "output":  config.paths.output,
+        },
+    }
+    try:
+        plan = build_archive_plan(
+            tournament_name=t.name,
+            tournament_id=t.id,
+            archive_root=archive_root,
+            sources=sources,
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {
+        "tournament_name": plan.tournament_name,
+        "archive_root": plan.archive_root,
+        "total_files": plan.total_files,
+        "total_bytes": plan.total_bytes,
+        "total_gb": round(plan.total_bytes / 1024 ** 3, 2),
+    }
+
+
+def start_archive_async(
+    config: PipelineConfig,
+    *,
+    tournament_id: int,
+    archive_root: Path,
+    delete_source: bool = True,
+) -> threading.Thread:
+    """Run the archive in a daemon thread; UI polls runs.db for status."""
+    from archive import build_archive_plan, execute_archive
+    from db import get_tournament, open_db, update_tournament
+
+    db_path = _db_path_for(config)
+
+    def _target() -> None:
+        if db_path is None:
+            return
+        conn = open_db(db_path)
+        t = get_tournament(conn, tournament_id)
+        if t is None:
+            return
+        sources = {
+            config.discipline: {
+                "eingang": config.paths.eingang,
+                "output":  config.paths.output,
+            },
+        }
+        try:
+            plan = build_archive_plan(
+                tournament_name=t.name,
+                tournament_id=t.id,
+                archive_root=archive_root,
+                sources=sources,
+            )
+            with conn:
+                cur = conn.execute(
+                    "INSERT INTO archives "
+                    "(tournament_id, archive_path, started_at, state, "
+                    " bytes_copied, files_total) "
+                    "VALUES (?, ?, ?, 'running', 0, ?)",
+                    (tournament_id, plan.archive_root, __import__(
+                        "pipeline.status_file", fromlist=["now_iso"]
+                    ).now_iso(), plan.total_files),
+                )
+                archive_row_id = cur.lastrowid
+
+            result = execute_archive(plan, delete_source=delete_source)
+
+            with conn:
+                conn.execute(
+                    "UPDATE archives SET "
+                    " finished_at = ?, state = ?, bytes_copied = ?, "
+                    " files_verified = ?, error = ? "
+                    "WHERE id = ?",
+                    (result.finished_at, result.state, result.bytes_copied,
+                     result.files_verified, result.error, archive_row_id),
+                )
+
+            if result.state == "done":
+                update_tournament(
+                    conn, tournament_id,
+                    archived_at=result.finished_at,
+                    archive_path=plan.archive_root,
+                )
+        except Exception as exc:                   # pragma: no cover - defensive
+            try:
+                with conn:
+                    conn.execute(
+                        "INSERT INTO archives "
+                        "(tournament_id, archive_path, started_at, "
+                        " state, error) VALUES (?, '', '', 'error', ?)",
+                        (tournament_id, str(exc)),
+                    )
+            except Exception:
+                pass
+
+    thread = threading.Thread(
+        target=_target, name=f"archive-{config.discipline}", daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def list_archives_for(config: PipelineConfig) -> List[Dict[str, object]]:
+    from db import open_db
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return []
+    conn = open_db(db_path)
+    rows = conn.execute(
+        "SELECT a.*, t.name AS tournament_name FROM archives a "
+        "JOIN tournaments t ON t.id = a.tournament_id "
+        "ORDER BY a.started_at DESC LIMIT 50"
+    ).fetchall()
+    return [dict(r) for r in rows]

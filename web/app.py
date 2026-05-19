@@ -132,8 +132,8 @@ def index():
 def api_state(discipline: str):
     """Combined snapshot for the front-end's single poll loop.
 
-    Returns ``{pipeline, upload, files}`` so the JS only needs one
-    request per tab per cycle (was two before).
+    Returns ``{pipeline, upload, files, active_tournament}`` so the JS only
+    needs one request per tab per cycle.
     """
     config = _get_config_or_404(discipline)
     if config is None:
@@ -142,7 +142,147 @@ def api_state(discipline: str):
         "pipeline": services.get_status(config).to_dict(),
         "upload": services.get_upload_status(config).to_dict(),
         "files": services.list_output_files(config),
+        "active_tournament": services.get_active_tournament_for(config),
     })
+
+
+# ---- Tournaments (Dashboard Modul 1+4) ----
+
+@api_bp.route("/tournaments/<discipline>")
+@login_required
+def api_tournaments(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    return jsonify({
+        "tournaments": services.list_tournaments_for(config),
+        "active_tournament": services.get_active_tournament_for(config),
+    })
+
+
+@api_bp.route("/tournaments/<discipline>", methods=["POST"])
+@login_required
+def api_tournament_create(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    payload = request.get_json(silent=True) or {}
+    created = services.create_tournament_for(config, payload)
+    if created is None:
+        return jsonify({"error": "invalid payload"}), 400
+    return jsonify(created), 201
+
+
+@api_bp.route("/tournaments/<discipline>/<int:tid>", methods=["PATCH"])
+@login_required
+def api_tournament_update(discipline: str, tid: int):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    payload = request.get_json(silent=True) or {}
+    updated = services.update_tournament_for(config, tid, payload)
+    if updated is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(updated)
+
+
+@api_bp.route("/tournaments/<discipline>/<int:tid>/activate", methods=["POST"])
+@login_required
+def api_tournament_activate(discipline: str, tid: int):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    if not services.set_active_tournament_for(config, discipline, tid):
+        return jsonify({"error": "tournament not found"}), 404
+    return jsonify({"status": "activated", "tournament_id": tid})
+
+
+# ---- Run history (Dashboard Modul 3) ----
+
+@api_bp.route("/history/<discipline>")
+@login_required
+def api_history(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    return jsonify(services.get_run_history_for(config))
+
+
+# ---- Storage watcher (Dashboard Modul 6.2) ----
+
+@api_bp.route("/storage")
+@login_required
+def api_storage():
+    """Snapshot of all volumes the pipeline cares about. No discipline."""
+    configs = _configs()
+    volume_roots = set()
+    for cfg in configs.values():
+        for p in cfg.paths.all():
+            # Step up to the /volume<N>/<share>/ level if possible.
+            try:
+                parts = p.resolve().parts
+            except OSError:
+                continue
+            if len(parts) >= 3 and parts[1].startswith("volume"):
+                volume_roots.add(Path("/" + parts[1] + "/" + parts[2]))
+            elif p.is_dir():
+                volume_roots.add(p)
+    if not volume_roots:
+        return jsonify({"volumes": [], "overall_status": "ok"})
+    return jsonify(services.get_storage_snapshot(sorted(volume_roots)))
+
+
+# ---- Archive flow (Auftrag 5 + Dashboard Modul 5/8) ----
+
+@api_bp.route("/archive/<discipline>/plan", methods=["POST"])
+@login_required
+def api_archive_plan(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    payload = request.get_json(silent=True) or {}
+    tournament_id = payload.get("tournament_id")
+    archive_root = payload.get("archive_root")
+    if not tournament_id or not archive_root:
+        return jsonify({"error": "tournament_id + archive_root required"}), 400
+    plan = services.build_archive_plan_for(
+        config, tournament_id=int(tournament_id),
+        archive_root=Path(archive_root),
+    )
+    if plan is None:
+        return jsonify({"error": "could not build plan"}), 400
+    return jsonify(plan)
+
+
+@api_bp.route("/archive/<discipline>/execute", methods=["POST"])
+@login_required
+def api_archive_execute(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    payload = request.get_json(silent=True) or {}
+    tournament_id = payload.get("tournament_id")
+    archive_root = payload.get("archive_root")
+    delete_source = bool(payload.get("delete_source", True))
+    confirm = payload.get("confirm")
+    if not tournament_id or not archive_root:
+        return jsonify({"error": "tournament_id + archive_root required"}), 400
+    if confirm != "yes":
+        return jsonify({"error": "confirmation required (confirm='yes')"}), 400
+    services.start_archive_async(
+        config, tournament_id=int(tournament_id),
+        archive_root=Path(archive_root), delete_source=delete_source,
+    )
+    return jsonify({"status": "scheduled", "tournament_id": tournament_id}), 202
+
+
+@api_bp.route("/archives/<discipline>")
+@login_required
+def api_archives(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    return jsonify({"archives": services.list_archives_for(config)})
 
 
 @api_bp.route("/run/<discipline>", methods=["POST"])
