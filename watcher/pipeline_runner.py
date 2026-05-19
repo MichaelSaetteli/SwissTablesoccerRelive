@@ -225,6 +225,24 @@ def run_pipeline(
             f"Pipeline for {config.discipline} is disabled in config"
         )
 
+    # M2: honour the per-discipline pause flag. We check this BEFORE
+    # grabbing the per-discipline lock so a paused pipeline never
+    # appears as "already running" when the operator inspects state.
+    effective_db = db_path if db_path is not None else _resolve_db_path(config)
+    if effective_db is not None:
+        try:
+            from db import is_paused, open_db
+            if is_paused(open_db(effective_db), config.discipline):
+                raise PipelineRunError(
+                    f"Pipeline for {config.discipline} is paused - "
+                    f"resume it in the UI before triggering a run"
+                )
+        except PipelineRunError:
+            raise
+        except Exception:
+            # Stale DB or transient error: log via writer, do not block.
+            pass
+
     lock = _lock_for(config)
     if not lock.acquire(blocking=False):
         raise PipelineRunError(
@@ -235,7 +253,6 @@ def run_pipeline(
 
     # Build a recorder if DB persistence is requested (Dashboard support).
     # Resolution order: explicit db_path arg > derived from config dir.
-    effective_db = db_path if db_path is not None else _resolve_db_path(config)
     recorder: "_NullRecorder|_DBRecorder"
     if effective_db is not None:
         try:
@@ -377,6 +394,160 @@ def run_pipeline(
         writer.fail_run(f"{type(exc).__name__}: {exc}")
         writer.append_log("Traceback: " + traceback.format_exc().splitlines()[-1])
         raise PipelineRunError(str(exc)) from exc
+    finally:
+        lock.release()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Per-Job restart (M2)
+# ---------------------------------------------------------------------------
+
+def restart_run(
+    config: PipelineConfig,
+    run_id: int,
+    *,
+    from_phase: str = "merge",
+) -> StatusWriter:
+    """Re-execute the pipeline for a single existing Run, starting from
+    *from_phase*. Useful when a single ffmpeg merge failed and the operator
+    wants to retry without re-processing every other folder.
+
+    Phases supported:
+      * ``rename`` - re-run rename_folder, then merge
+      * ``merge``  - re-run merge_folder only (the default)
+      * ``output`` - just verify the output file exists (sanity check)
+
+    The work directory must still contain the prepared
+    ``video_*.mp4`` files - the runner does not move the folder back
+    out of work/.
+    """
+    from db import (
+        clear_phases_for_restart,
+        is_paused,
+        mark_restart_started,
+        open_db,
+        resolve_restart_target,
+    )
+    from db.runs import finish_run as db_finish_run
+    from db.runs import record_phase as db_record_phase
+    from pipeline.merge_ffmpeg import merge_folder
+    from pipeline.rename_mp4 import rename_folder
+
+    if from_phase not in ("rename", "merge", "output"):
+        raise PipelineRunError(
+            f"Unsupported restart phase {from_phase!r}; "
+            f"allowed: rename | merge | output"
+        )
+
+    effective_db = _resolve_db_path(config)
+    if effective_db is None:
+        raise PipelineRunError(
+            "Cannot restart - this config has no source_path; "
+            "DB persistence is required for the restart flow."
+        )
+    conn = open_db(effective_db)
+    if is_paused(conn, config.discipline):
+        raise PipelineRunError(
+            f"Pipeline for {config.discipline} is paused - resume first"
+        )
+
+    target = resolve_restart_target(
+        conn, run_id, work_root=str(config.paths.work), from_phase=from_phase,
+    )
+    if target is None:
+        raise PipelineRunError(f"Run #{run_id} not found")
+    if target.discipline != config.discipline:
+        raise PipelineRunError(
+            f"Run #{run_id} belongs to {target.discipline}, "
+            f"not {config.discipline}"
+        )
+
+    # Acquire the per-discipline lock just like a normal run so we never
+    # race with the watcher.
+    lock = _lock_for(config)
+    if not lock.acquire(blocking=False):
+        raise PipelineRunError(
+            f"Pipeline for {config.discipline} is already running"
+        )
+
+    writer = StatusWriter(status_path_for(config), config.discipline)
+    try:
+        work_folder = Path(target.work_path)
+        if not work_folder.is_dir():
+            raise PipelineRunError(
+                f"Work folder vanished: {work_folder} - did the original "
+                f"run already archive? Re-trigger a full pipeline run."
+            )
+
+        clear_phases_for_restart(conn, run_id, from_phase)
+        mark_restart_started(conn, run_id)
+        writer.append_log(
+            f"Restart run #{run_id} ({target.folder_name}) from {from_phase}"
+        )
+
+        if from_phase == "rename":
+            with _timed_phase() as rn_t:
+                rename_folder(work_folder)
+            db_record_phase(
+                conn, run_id=run_id, phase="rename",
+                started_at=rn_t["started_at"],
+                duration_s=rn_t["duration_s"],
+            )
+            from_phase = "merge"   # fall through
+
+        if from_phase == "merge":
+            writer.update(state=State.MERGING)
+            result = merge_folder(work_folder, config)
+            if result.started_at is not None:
+                db_record_phase(
+                    conn, run_id=run_id, phase="merge",
+                    started_at=result.started_at,
+                    duration_s=result.duration_s,
+                )
+            if result.success:
+                db_finish_run(
+                    conn, run_id=run_id, state="done",
+                    output_bytes=result.output_bytes,
+                    output_filename=result.output.name,
+                )
+                writer.append_log(
+                    f"OK restart {target.folder_name} -> "
+                    f"{result.output.name} ({result.duration_s:.1f}s)"
+                )
+                writer.update(state=State.DONE)
+            else:
+                db_finish_run(
+                    conn, run_id=run_id, state="error",
+                    error=f"rc={result.returncode}",
+                )
+                writer.append_log(
+                    f"FAIL restart {target.folder_name} rc={result.returncode}"
+                )
+                writer.update(state=State.ERROR)
+            return writer
+
+        # from_phase == "output": just verify existence
+        out = config.paths.output / target.output_filename
+        if out.is_file():
+            db_finish_run(
+                conn, run_id=run_id, state="done",
+                output_bytes=out.stat().st_size,
+                output_filename=target.output_filename,
+            )
+            writer.append_log(f"OK output verify {out.name}")
+            writer.update(state=State.DONE)
+        else:
+            db_finish_run(
+                conn, run_id=run_id, state="error",
+                error=f"output missing: {out}",
+            )
+            writer.append_log(f"FAIL output verify - {out} missing")
+            writer.update(state=State.ERROR)
+        return writer
     finally:
         lock.release()
 
