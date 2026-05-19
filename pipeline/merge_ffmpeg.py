@@ -18,11 +18,14 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Sequence
+
+from pipeline.status_file import now_iso
 
 from .config_loader import PipelineConfig, build_output_filename
 
@@ -41,6 +44,10 @@ class MergeResult:
     returncode: int
     stderr: str = ""
     log_path: Optional[Path] = None
+    started_at: Optional[str] = None     # ISO-8601 with TZ, set by merge_folder
+    duration_s: float = 0.0
+    input_bytes: int = 0                 # Sum of all video_*.mp4 in the folder
+    output_bytes: int = 0                # Size of the merged output (0 on fail)
 
 
 class MergeError(RuntimeError):
@@ -175,15 +182,26 @@ def merge_folder(
     concat_list = write_concat_list(folder, files)
     cmd = build_ffmpeg_command(concat_list, partial_path)
 
+    input_bytes = sum((f.stat().st_size for f in files), 0)
+    started_at = now_iso()
+    t0 = time.monotonic()
+
     run = runner or _default_runner
     completed = run(cmd)
+    duration_s = time.monotonic() - t0
+
     success = completed.returncode == 0
     stderr = completed.stderr or ""
 
     log_path = _write_ffmpeg_log(config, folder, cmd, completed)
 
+    output_bytes = 0
     if success and partial_path.is_file():
         os.replace(partial_path, final_path)
+        try:
+            output_bytes = final_path.stat().st_size
+        except OSError:
+            output_bytes = 0
     else:
         # Clean up the partial so a re-run starts fresh.
         try:
@@ -205,6 +223,10 @@ def merge_folder(
         returncode=completed.returncode,
         stderr=stderr,
         log_path=log_path,
+        started_at=started_at,
+        duration_s=duration_s,
+        input_bytes=input_bytes,
+        output_bytes=output_bytes,
     )
 
 

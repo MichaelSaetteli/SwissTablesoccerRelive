@@ -16,9 +16,11 @@ from __future__ import annotations
 import shutil
 import sys
 import threading
+import time
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from pipeline.MoveFiles import move_path
 from pipeline.config_loader import (
@@ -26,9 +28,10 @@ from pipeline.config_loader import (
     ensure_pipeline_dirs,
     load_config,
 )
-from pipeline.merge_ffmpeg import merge_all
+from pipeline.merge_ffmpeg import MergeResult, merge_all
 from pipeline.organize_folders import organize_root
 from pipeline.rename_mp4 import rename_root
+from pipeline.status_file import now_iso
 
 from .status import State, StatusWriter, status_path_for
 
@@ -109,6 +112,85 @@ def check_disk_space(folders: Sequence[Path], output_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# DB persistence helpers (optional - run_pipeline works without a DB)
+# ---------------------------------------------------------------------------
+
+class _NullRecorder:
+    """No-op recorder used when no db_path is configured."""
+    tournament_id: int = 0
+
+    def start_run(self, folder_name: str, input_bytes: int = 0) -> Optional[int]:
+        return None
+
+    def record_phase(self, run_id: Optional[int], phase: str,
+                     started_at: str, duration_s: float) -> None:
+        pass
+
+    def finish_run(self, run_id: Optional[int], state: str,
+                   output_bytes: int = 0, output_filename: str = "",
+                   error: Optional[str] = None) -> None:
+        pass
+
+
+class _DBRecorder:
+    """Writes Tournament + Run + Phase rows to SQLite for the Dashboard."""
+
+    def __init__(self, db_path: Path, discipline: str) -> None:
+        # Imported here so a missing db/ package would never crash the
+        # core pipeline; the recorder is only constructed when db_path is set.
+        from db import (
+            get_or_create_active_tournament,
+            open_db,
+        )
+        self._db = open_db(db_path)
+        self._discipline = discipline
+        tournament = get_or_create_active_tournament(self._db, discipline)
+        assert tournament.id is not None
+        self.tournament_id = tournament.id
+
+    def start_run(self, folder_name: str, input_bytes: int = 0) -> Optional[int]:
+        from db.runs import start_run
+        run = start_run(
+            self._db,
+            tournament_id=self.tournament_id,
+            discipline=self._discipline,
+            folder_name=folder_name,
+            input_bytes=input_bytes,
+        )
+        return run.id
+
+    def record_phase(self, run_id: Optional[int], phase: str,
+                     started_at: str, duration_s: float) -> None:
+        if run_id is None:
+            return
+        from db.runs import record_phase
+        record_phase(self._db, run_id=run_id, phase=phase,
+                     started_at=started_at, duration_s=duration_s)
+
+    def finish_run(self, run_id: Optional[int], state: str,
+                   output_bytes: int = 0, output_filename: str = "",
+                   error: Optional[str] = None) -> None:
+        if run_id is None:
+            return
+        from db.runs import finish_run
+        finish_run(self._db, run_id=run_id, state=state,
+                   output_bytes=output_bytes,
+                   output_filename=output_filename, error=error)
+
+
+@contextmanager
+def _timed_phase():
+    """Context manager that records start time + duration of a code block."""
+    started = now_iso()
+    t0 = time.monotonic()
+    state = {"started_at": started, "duration_s": 0.0}
+    try:
+        yield state
+    finally:
+        state["duration_s"] = time.monotonic() - t0
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 
@@ -116,7 +198,19 @@ class PipelineRunError(RuntimeError):
     """Raised when the pipeline cannot complete a run."""
 
 
-def run_pipeline(config: PipelineConfig) -> StatusWriter:
+def _resolve_db_path(config: PipelineConfig) -> Optional[Path]:
+    """The DB lives next to the config files; if source_path is missing
+    we run without persistence (tests, ad-hoc CLI usage)."""
+    if config.source_path is None:
+        return None
+    return config.source_path.parent / "runs.db"
+
+
+def run_pipeline(
+    config: PipelineConfig,
+    *,
+    db_path: Optional[Path] = None,
+) -> StatusWriter:
     """Run the full pipeline once for *config*.
 
     The function blocks until the run finishes and returns the live
@@ -138,6 +232,21 @@ def run_pipeline(config: PipelineConfig) -> StatusWriter:
         )
 
     writer = StatusWriter(status_path_for(config), config.discipline)
+
+    # Build a recorder if DB persistence is requested (Dashboard support).
+    # Resolution order: explicit db_path arg > derived from config dir.
+    effective_db = db_path if db_path is not None else _resolve_db_path(config)
+    recorder: "_NullRecorder|_DBRecorder"
+    if effective_db is not None:
+        try:
+            recorder = _DBRecorder(effective_db, config.discipline)
+        except Exception as exc:
+            # DB failure must never block the pipeline - degrade to no-op.
+            writer.append_log(f"DB persistence disabled: {exc}")
+            recorder = _NullRecorder()
+    else:
+        recorder = _NullRecorder()
+
     try:
         ensure_pipeline_dirs(config)
 
@@ -163,24 +272,54 @@ def run_pipeline(config: PipelineConfig) -> StatusWriter:
 
         # --- Step 1: move eingang -> work
         writer.update(state=State.MOVING)
-        moved_folders = _step_move(folders, config.paths.work)
-        writer.append_log(f"Moved {len(moved_folders)} folder(s) to work")
+        with _timed_phase() as move_t:
+            moved_folders = _step_move(folders, config.paths.work)
+        writer.append_log(
+            f"Moved {len(moved_folders)} folder(s) to work "
+            f"in {move_t['duration_s']:.2f}s"
+        )
 
         # --- Step 2: organize (split >24)
         writer.update(state=State.ORGANIZING)
-        prepared = organize_root(
-            config.paths.work,
-            max_files=config.max_files_per_folder,
-        )
+        with _timed_phase() as org_t:
+            prepared = organize_root(
+                config.paths.work,
+                max_files=config.max_files_per_folder,
+            )
         writer.append_log(
-            f"Organized into {len(prepared)} folder(s): "
+            f"Organized into {len(prepared)} folder(s) "
+            f"in {org_t['duration_s']:.2f}s: "
             f"{[p.name for p in prepared]}"
         )
 
         # --- Step 3: rename to video_NNN.mp4
         writer.update(state=State.RENAMING)
-        renamed = rename_root(config.paths.work)
-        writer.append_log(f"Renamed {len(renamed)} mp4 file(s)")
+        with _timed_phase() as rn_t:
+            renamed = rename_root(config.paths.work)
+        writer.append_log(
+            f"Renamed {len(renamed)} mp4 file(s) "
+            f"in {rn_t['duration_s']:.2f}s"
+        )
+
+        # --- Per-folder Run rows: one row per output file we are about
+        # to produce. Pre-merge phases (move/organize/rename) are recorded
+        # against every Run because they are shared overhead.
+        run_id_by_folder: Dict[str, Optional[int]] = {}
+        for prep_folder in prepared:
+            input_bytes = sum(
+                (f.stat().st_size for f in prep_folder.iterdir()
+                 if f.is_file() and f.suffix.lower() == ".mp4"),
+                0,
+            )
+            rid = recorder.start_run(prep_folder.name, input_bytes=input_bytes)
+            run_id_by_folder[prep_folder.name] = rid
+            for phase, timing in (
+                ("move", move_t), ("organize", org_t), ("rename", rn_t),
+            ):
+                recorder.record_phase(
+                    rid, phase,
+                    timing["started_at"], timing["duration_s"],
+                )
 
         # --- Step 4: ffmpeg merge (parallel)
         writer.update(state=State.MERGING)
@@ -188,10 +327,31 @@ def run_pipeline(config: PipelineConfig) -> StatusWriter:
 
         failed = [r for r in results if not r.success]
         succeeded = [r for r in results if r.success]
+
+        # Per-folder merge timing -> Run.run_phases + Run finish state.
+        for r in results:
+            rid = run_id_by_folder.get(r.folder.name)
+            if r.started_at is not None:
+                recorder.record_phase(
+                    rid, "merge", r.started_at, r.duration_s,
+                )
+            if r.success:
+                recorder.finish_run(
+                    rid, "done",
+                    output_bytes=r.output_bytes,
+                    output_filename=r.output.name,
+                )
+            else:
+                recorder.finish_run(
+                    rid, "error",
+                    error=f"rc={r.returncode}",
+                )
+
         for r in succeeded:
             log_hint = f" [log: {r.log_path.name}]" if r.log_path else ""
             writer.append_log(
-                f"OK     {r.folder.name} -> {r.output.name}{log_hint}"
+                f"OK     {r.folder.name} -> {r.output.name} "
+                f"({r.duration_s:.1f}s){log_hint}"
             )
         for r in failed:
             log_hint = f" [log: {r.log_path}]" if r.log_path else ""
