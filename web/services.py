@@ -228,6 +228,64 @@ def get_upload_status(config: PipelineConfig) -> UploadStatus:
     return existing or UploadStatus(discipline=config.discipline)
 
 
+def _parse_iso(ts: Optional[str]):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(ts) if ts else None
+    except (TypeError, ValueError):
+        return None
+
+
+def compute_upload_throughput(
+    status: UploadStatus, total_bytes: int,
+) -> Dict[str, object]:
+    """Effective upload speed + ETA derived from an UploadStatus (B1).
+
+    UploadStatus tracks file counts + percent but not bytes, so we
+    approximate uploaded bytes as ``total_bytes * overall-fraction``.
+    That is plenty for a live speed gauge; exact per-file byte tracking
+    is not worth the plumbing. Throughput is the average over the elapsed
+    upload window (``updated_at - started_at``), expressed in Mbit/s.
+    """
+    total_files = status.total_files or 0
+    fraction = 0.0
+    if total_files > 0:
+        fraction = (
+            status.completed_files
+            + (status.current_progress_percent or 0.0) / 100.0
+        ) / total_files
+        fraction = max(0.0, min(1.0, fraction))
+    uploaded_bytes = int(total_bytes * fraction)
+
+    start = _parse_iso(status.started_at)
+    end = _parse_iso(status.updated_at)
+    elapsed_s = (end - start).total_seconds() if (start and end) else 0.0
+
+    mbit_s: Optional[float] = None
+    eta_seconds: Optional[float] = None
+    if elapsed_s > 0 and uploaded_bytes > 0:
+        rate = uploaded_bytes / elapsed_s          # bytes/s
+        mbit_s = round(rate * 8 / 1_000_000, 2)
+        remaining = max(0, total_bytes - uploaded_bytes)
+        eta_seconds = round(remaining / rate, 1) if rate > 0 else None
+
+    return {
+        "state": status.state,
+        "total_bytes": total_bytes,
+        "uploaded_bytes": uploaded_bytes,
+        "percent": round(fraction * 100, 1),
+        "mbit_s": mbit_s,
+        "eta_seconds": eta_seconds,
+    }
+
+
+def get_upload_throughput_for(config: PipelineConfig) -> Dict[str, object]:
+    """Live upload throughput for the dashboard, from status + output sizes."""
+    status = get_upload_status(config)
+    total_bytes = sum(int(f["size_bytes"]) for f in list_output_files(config))
+    return compute_upload_throughput(status, total_bytes)
+
+
 def _default_service_factory(config: PipelineConfig) -> object:
     """Build a real Google YouTube service from the saved token."""
     from youtube.oauth_setup import build_youtube_service, load_credentials

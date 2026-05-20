@@ -72,6 +72,7 @@
         renderStatus(panel, data.pipeline);
         renderFiles(panel, discipline, data.files);
         renderUploadStatus(panel, data.upload);
+        renderUploadThroughput(panel, data.upload_throughput);
         renderActiveTournament(panel, data.active_tournament);
         renderEstimate(panel, data.processing_estimate);
       }
@@ -97,6 +98,19 @@
       name.textContent = t.name;
       if (badge) badge.textContent = t.is_auto_created ? " (auto)" : "";
     }
+  }
+
+  function renderUploadThroughput(panel, t) {
+    const el = panel.querySelector('[data-field="upload_speed"]');
+    if (!el) return;
+    if (!t || t.mbit_s == null) { el.textContent = "--"; return; }
+    let txt = `${t.mbit_s.toFixed(2)} Mbit/s`;
+    if (t.state === "uploading" && t.eta_seconds != null && t.eta_seconds > 0) {
+      txt += ` · Rest ~ ${fmtDuration(t.eta_seconds)}`;
+    } else if (t.state === "done") {
+      txt = `Ø ${t.mbit_s.toFixed(2)} Mbit/s (abgeschlossen)`;
+    }
+    el.textContent = txt;
   }
 
   function renderEstimate(panel, est) {

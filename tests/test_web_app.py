@@ -191,7 +191,7 @@ def test_api_state_returns_combined_payload(client) -> None:
     data = res.get_json()
     assert set(data.keys()) == {
         "pipeline", "upload", "files", "active_tournament",
-        "processing_estimate",
+        "processing_estimate", "upload_throughput",
     }
     assert data["pipeline"]["discipline"] == "Doppel"
     assert data["pipeline"]["state"] == State.IDLE

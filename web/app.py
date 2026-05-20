@@ -144,6 +144,7 @@ def api_state(discipline: str):
         "files": services.list_output_files(config),
         "active_tournament": services.get_active_tournament_for(config),
         "processing_estimate": services.get_processing_estimate_for(config),
+        "upload_throughput": services.get_upload_throughput_for(config),
     })
 
 
