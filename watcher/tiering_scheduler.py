@@ -49,6 +49,7 @@ class TieringScheduler:
         sweep_fn: SweepFn,
         stage_fn: StageFn,
         upload_info_fn: UploadInfoFn,
+        speedtest_fn: Optional[Callable[[], object]] = None,
         poll_interval: float = 1800.0,
         day_fn: Optional[DayFn] = None,
     ) -> None:
@@ -57,6 +58,7 @@ class TieringScheduler:
         self._sweep_fn = sweep_fn
         self._stage_fn = stage_fn
         self._upload_info_fn = upload_info_fn
+        self._speedtest_fn = speedtest_fn
         self.poll_interval = poll_interval
         self._day_fn = day_fn or (lambda: date.today().isoformat())
 
@@ -91,7 +93,7 @@ class TieringScheduler:
                 log.exception("auto-stage failed for %s", name)
             self._staged_for[name] = finished_at
 
-        # ---- Retention sweep: at most once per calendar day.
+        # ---- Daily idle tasks: retention sweep + speedtest, once per day.
         today = self._day_fn()
         if today != self._last_sweep_day:
             for cfg in self._configs.values():
@@ -101,6 +103,11 @@ class TieringScheduler:
                     self._sweep_fn(cfg)
                 except Exception:                      # pragma: no cover
                     log.exception("retention sweep failed")
+            if self._speedtest_fn is not None:
+                try:
+                    self._speedtest_fn()
+                except Exception:                      # pragma: no cover
+                    log.exception("daily speedtest failed")
             self._last_sweep_day = today
 
     def start(self) -> None:

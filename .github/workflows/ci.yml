@@ -71,7 +71,7 @@ jobs:
       - name: Smoke-import every module
         run: |
           python -c "import pipeline.config_loader, pipeline.merge_ffmpeg, pipeline.organize_folders, pipeline.rename_mp4, pipeline.MoveFiles, pipeline.status_file"
-          python -c "import watcher.folder_watcher, watcher.pipeline_runner, watcher.status, watcher.storage_watcher, watcher.tiering_scheduler"
+          python -c "import watcher.folder_watcher, watcher.pipeline_runner, watcher.status, watcher.storage_watcher, watcher.tiering_scheduler, watcher.speedtest"
           python -c "import web.app, web.services, web.auth"
           python -c "import youtube.metadata_builder, youtube.oauth_setup, youtube.upload_status, youtube.youtube_uploader"
           python -c "import db, db.control, db.runs, db.schema, db.tournaments, db.estimates"

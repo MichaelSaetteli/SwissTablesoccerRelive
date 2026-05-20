@@ -124,3 +124,34 @@ def test_autostage_skips_without_staging_root():
     s = _scheduler(h, {"Doppel": cfg})
     s.tick()
     assert h.staged == []
+
+
+def test_speedtest_runs_once_per_day():
+    h = Harness(idle=True)
+    calls = []
+    cfg = FakeConfig("Doppel")
+    s = TieringScheduler(
+        {"Doppel": cfg},
+        idle_fn=h.idle_fn, sweep_fn=h.sweep_fn, stage_fn=h.stage_fn,
+        upload_info_fn=h.upload_info_fn,
+        speedtest_fn=lambda: calls.append(1),
+        day_fn=lambda: "2026-05-20",
+    )
+    s.tick()
+    s.tick()  # same day -> no second speedtest
+    assert calls == [1]
+
+
+def test_speedtest_not_run_when_busy():
+    h = Harness(idle=False)
+    calls = []
+    cfg = FakeConfig("Doppel")
+    s = TieringScheduler(
+        {"Doppel": cfg},
+        idle_fn=h.idle_fn, sweep_fn=h.sweep_fn, stage_fn=h.stage_fn,
+        upload_info_fn=h.upload_info_fn,
+        speedtest_fn=lambda: calls.append(1),
+        day_fn=lambda: "2026-05-20",
+    )
+    s.tick()
+    assert calls == []

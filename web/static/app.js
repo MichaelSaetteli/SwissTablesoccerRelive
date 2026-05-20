@@ -668,7 +668,27 @@
       const data = await res.json();
       renderStorageBanner(data);
       renderStorageList(data);
+      renderSpeedtest(data.speedtest);
     } catch (e) { console.warn("storage poll failed", e); }
+  }
+
+  function renderSpeedtest(st) {
+    const el = document.querySelector('[data-field="speedtest_line"]');
+    if (!el) return;
+    if (!st) { el.textContent = "Noch keine Messung."; return; }
+    if (!st.ok) {
+      el.textContent = `Letzter Speedtest fehlgeschlagen: ${st.error || ""}`;
+      return;
+    }
+    const when = (st.measured_at || "").replace("T", " ").slice(0, 16);
+    let txt = `↓ ${st.download_mbit_s} · ↑ ${st.upload_mbit_s} Mbit/s` +
+              ` · ${st.ping_ms} ms · ${when}`;
+    // Stale marker if older than 48 h.
+    const t = Date.parse(st.measured_at);
+    if (!isNaN(t) && (Date.now() - t) > 48 * 3600 * 1000) {
+      txt += " (veraltet – System war durchgehend beschaeftigt?)";
+    }
+    el.textContent = txt;
   }
 
   function renderStorageBanner(data) {

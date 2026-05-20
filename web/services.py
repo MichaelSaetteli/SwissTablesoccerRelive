@@ -688,6 +688,41 @@ def _reset_tiering_status_for_tests() -> None:
         _tiering_status.clear()
 
 
+# ---- Internet speedtest (M3 / B3) -----------------------------------------
+
+def _data_dir_for(configs: Dict[str, PipelineConfig]) -> Optional[Path]:
+    """The shared data dir (where configs + the speedtest result live)."""
+    for cfg in configs.values():
+        if cfg.source_path is not None:
+            return cfg.source_path.parent
+    return None
+
+
+def get_last_speedtest(configs: Dict[str, PipelineConfig]) -> Optional[Dict[str, object]]:
+    """The most recent persisted speedtest result, or None if never run."""
+    from watcher.speedtest import read_speedtest, speedtest_path_for
+    data_dir = _data_dir_for(configs)
+    if data_dir is None:
+        return None
+    result = read_speedtest(speedtest_path_for(data_dir))
+    return result.to_dict() if result else None
+
+
+def run_and_store_speedtest(
+    configs: Dict[str, PipelineConfig],
+) -> Optional[Dict[str, object]]:
+    """Run the Ookla speedtest and persist it next to the configs."""
+    from watcher.speedtest import (
+        run_speedtest, speedtest_path_for, write_speedtest,
+    )
+    data_dir = _data_dir_for(configs)
+    if data_dir is None:
+        return None
+    result = run_speedtest()
+    write_speedtest(speedtest_path_for(data_dir), result)
+    return result.to_dict()
+
+
 # ---- Storage --------------------------------------------------------------
 
 _storage_watcher_cache: Dict[str, object] = {}

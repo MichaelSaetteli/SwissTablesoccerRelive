@@ -360,8 +360,11 @@ def api_storage():
             elif p.is_dir():
                 volume_roots.add(p)
     if not volume_roots:
-        return jsonify({"volumes": [], "overall_status": "ok"})
-    return jsonify(services.get_storage_snapshot(sorted(volume_roots)))
+        snapshot = {"volumes": [], "overall_status": "ok"}
+    else:
+        snapshot = dict(services.get_storage_snapshot(sorted(volume_roots)))
+    snapshot["speedtest"] = services.get_last_speedtest(configs)
+    return jsonify(snapshot)
 
 
 # ---- Archive flow (Auftrag 5 + Dashboard Modul 5/8) ----
@@ -666,6 +669,7 @@ def _start_tiering_scheduler(configs: Dict[str, PipelineConfig]):
         sweep_fn=services.run_retention_sweep_for,
         stage_fn=services.tier_discipline,
         upload_info_fn=_upload_info,
+        speedtest_fn=lambda: services.run_and_store_speedtest(configs),
     )
     scheduler.start()
     print("[tiering] scheduler started (idle-gated daily sweep + auto-stage)",
