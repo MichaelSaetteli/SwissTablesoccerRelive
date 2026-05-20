@@ -132,12 +132,46 @@ def open_db(path: Path) -> sqlite3.Connection:
                 detect_types=sqlite3.PARSE_DECLTYPES,
             )
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode = WAL")
+            _set_journal_mode(conn)
             conn.execute("PRAGMA synchronous = NORMAL")
             conn.execute("PRAGMA foreign_keys = ON")
             ensure_schema(conn)
             _connections[key] = conn
         return conn
+
+
+def _set_journal_mode(conn: sqlite3.Connection) -> None:
+    """Enable WAL where possible, else fall back to the rollback journal.
+
+    WAL gives readers-don't-block-writer, but it needs an mmap-able
+    ``-shm`` sidecar file. On Synology Docker bind-mounts that mmap can
+    fail (the host filesystem works fine, but the same path through the
+    container's bind-mount does not support shared-memory WAL). When that
+    happens SQLite either refuses the PRAGMA or, worse, accepts it and
+    then throws ``disk I/O error`` on the first write.
+
+    DELETE (the default rollback journal) needs no ``-shm`` and works on
+    every filesystem. Our load is low and writes are serialised by the
+    per-discipline locks anyway, so losing WAL concurrency costs us
+    nothing. We probe WAL, verify it actually stuck with a trivial write,
+    and fall back to DELETE on any failure.
+    """
+    try:
+        result = conn.execute("PRAGMA journal_mode = WAL").fetchone()
+        active = str(result[0]).lower() if result else ""
+        if active == "wal":
+            # Verify WAL is truly usable: a checkpoint touches the -shm/-wal
+            # files. If the mount cannot back them, this raises here rather
+            # than on the first real INSERT.
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            return
+    except sqlite3.Error:
+        pass
+    # WAL not usable -> rollback journal.
+    try:
+        conn.execute("PRAGMA journal_mode = DELETE")
+    except sqlite3.Error:
+        pass
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
