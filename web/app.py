@@ -143,6 +143,9 @@ def api_state(discipline: str):
         "upload": services.get_upload_status(config).to_dict(),
         "files": services.list_output_files(config),
         "active_tournament": services.get_active_tournament_for(config),
+        "processing_estimate": services.get_processing_estimate_for(config),
+        "upload_throughput": services.get_upload_throughput_for(config),
+        "tiering": services.get_tiering_status(config),
     })
 
 
@@ -244,6 +247,33 @@ def api_pipeline_control(discipline: str):
     })
 
 
+@api_bp.route("/tiering/<discipline>", methods=["POST"])
+@login_required
+def api_tiering_start(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    if config.tiering_staging_root is None:
+        return jsonify({"error": "tiering.staging_root nicht konfiguriert"}), 400
+    if services.is_discipline_busy(config):
+        return jsonify({"error": "Disziplin ist beschaeftigt"}), 409
+    services.tier_discipline_async(config)
+    return jsonify({"discipline": discipline, "started": True}), 202
+
+
+@api_bp.route("/tiering/<discipline>/sweep", methods=["POST"])
+@login_required
+def api_tiering_sweep(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    # Idle-gate the sweep across ALL disciplines (decision #4).
+    if not services.is_system_idle(_configs()):
+        return jsonify({"error": "System beschaeftigt - Sweep abgelehnt"}), 409
+    result = services.run_retention_sweep_for(config)
+    return jsonify(result), 200 if result.get("ok") else 400
+
+
 @api_bp.route("/jobs/<discipline>")
 @login_required
 def api_jobs_list(discipline: str):
@@ -330,8 +360,11 @@ def api_storage():
             elif p.is_dir():
                 volume_roots.add(p)
     if not volume_roots:
-        return jsonify({"volumes": [], "overall_status": "ok"})
-    return jsonify(services.get_storage_snapshot(sorted(volume_roots)))
+        snapshot = {"volumes": [], "overall_status": "ok"}
+    else:
+        snapshot = dict(services.get_storage_snapshot(sorted(volume_roots)))
+    snapshot["speedtest"] = services.get_last_speedtest(configs)
+    return jsonify(snapshot)
 
 
 # ---- Archive flow (Auftrag 5 + Dashboard Modul 5/8) ----
@@ -622,6 +655,28 @@ def _start_watchers(configs: Dict[str, PipelineConfig]) -> List[object]:
     return watchers
 
 
+def _start_tiering_scheduler(configs: Dict[str, PipelineConfig]):
+    """Spawn the idle-gated tiering scheduler (daily sweep + auto-stage)."""
+    from watcher.tiering_scheduler import TieringScheduler
+
+    def _upload_info(cfg):
+        st = services.get_upload_status(cfg)
+        return st.state, st.finished_at
+
+    scheduler = TieringScheduler(
+        configs,
+        idle_fn=services.is_system_idle,
+        sweep_fn=services.run_retention_sweep_for,
+        stage_fn=services.tier_discipline,
+        upload_info_fn=_upload_info,
+        speedtest_fn=lambda: services.run_and_store_speedtest(configs),
+    )
+    scheduler.start()
+    print("[tiering] scheduler started (idle-gated daily sweep + auto-stage)",
+          file=sys.stderr)
+    return scheduler
+
+
 def _serve(app: Flask, host: str, port: int) -> None:
     """Production-grade WSGI server. Falls back to Flask's dev server if
     waitress is not importable (only happens in bare local dev)."""
@@ -650,6 +705,10 @@ def _main(argv: List[str]) -> int:
     if os.environ.get("ENABLE_WATCHER", "1") != "0":
         watchers = _start_watchers(configs)
 
+    scheduler = None
+    if os.environ.get("ENABLE_TIERING_SCHEDULER", "1") != "0":
+        scheduler = _start_tiering_scheduler(configs)
+
     app = create_app(configs)
     host = os.environ.get("WEB_HOST", "0.0.0.0")
     port = int(os.environ.get("WEB_PORT", "5000"))
@@ -660,6 +719,11 @@ def _main(argv: List[str]) -> int:
         for watcher in watchers:
             try:
                 watcher.stop()
+            except Exception:  # pragma: no cover - best-effort shutdown
+                pass
+        if scheduler is not None:
+            try:
+                scheduler.stop()
             except Exception:  # pragma: no cover - best-effort shutdown
                 pass
     return 0

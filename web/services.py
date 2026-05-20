@@ -7,6 +7,7 @@ spinning up a Flask test client.
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -21,6 +22,7 @@ from watcher.pipeline_runner import (
 )
 from watcher.status import (
     PipelineStatus,
+    State,
     StatusWriter,
     read_status,
     status_path_for,
@@ -31,6 +33,7 @@ from youtube.metadata_builder import (
     quota_hint,
 )
 from youtube.upload_status import (
+    UploadState,
     UploadStatus,
     UploadStatusWriter,
     read_upload_status,
@@ -225,6 +228,64 @@ def get_upload_preview(config: PipelineConfig) -> Dict[str, object]:
 def get_upload_status(config: PipelineConfig) -> UploadStatus:
     existing = read_upload_status(upload_status_path_for(config))
     return existing or UploadStatus(discipline=config.discipline)
+
+
+def _parse_iso(ts: Optional[str]):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(ts) if ts else None
+    except (TypeError, ValueError):
+        return None
+
+
+def compute_upload_throughput(
+    status: UploadStatus, total_bytes: int,
+) -> Dict[str, object]:
+    """Effective upload speed + ETA derived from an UploadStatus (B1).
+
+    UploadStatus tracks file counts + percent but not bytes, so we
+    approximate uploaded bytes as ``total_bytes * overall-fraction``.
+    That is plenty for a live speed gauge; exact per-file byte tracking
+    is not worth the plumbing. Throughput is the average over the elapsed
+    upload window (``updated_at - started_at``), expressed in Mbit/s.
+    """
+    total_files = status.total_files or 0
+    fraction = 0.0
+    if total_files > 0:
+        fraction = (
+            status.completed_files
+            + (status.current_progress_percent or 0.0) / 100.0
+        ) / total_files
+        fraction = max(0.0, min(1.0, fraction))
+    uploaded_bytes = int(total_bytes * fraction)
+
+    start = _parse_iso(status.started_at)
+    end = _parse_iso(status.updated_at)
+    elapsed_s = (end - start).total_seconds() if (start and end) else 0.0
+
+    mbit_s: Optional[float] = None
+    eta_seconds: Optional[float] = None
+    if elapsed_s > 0 and uploaded_bytes > 0:
+        rate = uploaded_bytes / elapsed_s          # bytes/s
+        mbit_s = round(rate * 8 / 1_000_000, 2)
+        remaining = max(0, total_bytes - uploaded_bytes)
+        eta_seconds = round(remaining / rate, 1) if rate > 0 else None
+
+    return {
+        "state": status.state,
+        "total_bytes": total_bytes,
+        "uploaded_bytes": uploaded_bytes,
+        "percent": round(fraction * 100, 1),
+        "mbit_s": mbit_s,
+        "eta_seconds": eta_seconds,
+    }
+
+
+def get_upload_throughput_for(config: PipelineConfig) -> Dict[str, object]:
+    """Live upload throughput for the dashboard, from status + output sizes."""
+    status = get_upload_status(config)
+    total_bytes = sum(int(f["size_bytes"]) for f in list_output_files(config))
+    return compute_upload_throughput(status, total_bytes)
 
 
 def _default_service_factory(config: PipelineConfig) -> object:
@@ -425,6 +486,241 @@ def get_run_history_for(
             "failed_runs": sum(1 for r in runs if r.state == "error"),
         },
     }
+
+
+# ---- Processing-time estimate (M3 / B2) -----------------------------------
+
+# eingang can hold 1-2 TB across many files; the dashboard polls every 3 s,
+# so we cache the directory scan and only re-measure every _BACKLOG_TTL_S.
+_BACKLOG_TTL_S = 30.0
+_backlog_cache: Dict[str, tuple] = {}
+
+
+def _eingang_backlog_bytes(config: PipelineConfig) -> int:
+    """Sum of .mp4 bytes still waiting in eingang, cached for _BACKLOG_TTL_S."""
+    eingang = config.paths.eingang
+    key = str(eingang)
+    now = time.monotonic()
+    cached = _backlog_cache.get(key)
+    if cached is not None and (now - cached[0]) < _BACKLOG_TTL_S:
+        return cached[1]
+
+    total = 0
+    if eingang.is_dir():
+        for p in eingang.rglob("*.mp4"):
+            try:
+                if p.is_file():
+                    total += p.stat().st_size
+            except OSError:
+                continue
+    _backlog_cache[key] = (now, total)
+    return total
+
+
+def get_processing_estimate_for(config: PipelineConfig) -> Dict[str, object]:
+    """Estimated processing time for the footage currently in eingang.
+
+    ``input_bytes`` is the measured eingang backlog; ``total_seconds`` is
+    ``None`` while the estimator is still calibrating (no completed run with
+    a known size yet).
+    """
+    from db import estimate_processing, open_db
+    backlog = _eingang_backlog_bytes(config)
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return {
+            "input_bytes": backlog, "total_seconds": None,
+            "per_phase": [], "sample_runs": 0, "calibrating": True,
+        }
+    conn = open_db(db_path)
+    est = estimate_processing(conn, backlog, discipline=config.discipline)
+    return est.to_dict()
+
+
+def _reset_backlog_cache_for_tests() -> None:
+    _backlog_cache.clear()
+
+
+# ---- Tiering / Auto-Cleanup (M3 / Block A) --------------------------------
+
+_BUSY_PIPELINE_STATES = {
+    State.MOVING, State.ORGANIZING, State.RENAMING, State.MERGING,
+}
+_BUSY_UPLOAD_STATES = {UploadState.PREPARING, UploadState.UPLOADING}
+
+# In-memory tiering status per discipline; the UI polls it via /api/state.
+_tiering_status: Dict[str, Dict[str, object]] = {}
+_tiering_lock = threading.Lock()
+
+
+def is_discipline_busy(config: PipelineConfig) -> bool:
+    """True while this discipline is mid-pipeline or mid-upload."""
+    if get_status(config).state in _BUSY_PIPELINE_STATES:
+        return True
+    if get_upload_status(config).state in _BUSY_UPLOAD_STATES:
+        return True
+    return False
+
+
+def is_system_idle(configs: Dict[str, PipelineConfig]) -> bool:
+    """True only when no discipline is processing or uploading."""
+    return not any(is_discipline_busy(c) for c in configs.values())
+
+
+def get_tiering_status(config: PipelineConfig) -> Dict[str, object]:
+    with _tiering_lock:
+        return dict(_tiering_status.get(
+            config.discipline, {"state": "idle"}
+        ))
+
+
+def _set_tiering_status(discipline: str, **fields: object) -> None:
+    with _tiering_lock:
+        cur = dict(_tiering_status.get(discipline, {}))
+        cur.update(fields)
+        _tiering_status[discipline] = cur
+
+
+def tier_discipline(
+    config: PipelineConfig,
+    *,
+    roles=("work", "output"),
+) -> Dict[str, object]:
+    """Verified move of this discipline's work_/output_ dirs to HDD staging.
+
+    Synchronous core (used by the async wrapper + tests). Refuses to run
+    while the discipline is busy, and is a no-op error when no staging root
+    is configured.
+    """
+    from archive import stage_to_hdd
+
+    staging_root = config.tiering_staging_root
+    if staging_root is None:
+        return {"ok": False, "error": "tiering.staging_root nicht konfiguriert"}
+    if is_discipline_busy(config):
+        return {"ok": False, "error": "Disziplin ist beschaeftigt"}
+
+    active = get_active_tournament_for(config) or {}
+    tournament_name = str(active.get("name") or f"Untagged-{config.discipline}")
+    tournament_id = active.get("id")
+    role_dirs = {"work": config.paths.work, "output": config.paths.output}
+
+    results: Dict[str, object] = {}
+    bytes_freed = 0
+    for role in roles:
+        src = role_dirs.get(role)
+        if src is None or not src.is_dir():
+            continue
+        res = stage_to_hdd(
+            tournament_name=tournament_name, discipline=config.discipline,
+            role=role, source_dir=src, staging_root=staging_root,
+            tournament_id=tournament_id,
+        )
+        results[role] = {
+            "state": res.state,
+            "files_verified": res.files_verified,
+            "bytes_copied": res.bytes_copied,
+            "error": res.error,
+        }
+        if res.state == "done":
+            bytes_freed += res.bytes_copied
+    ok = all(r["state"] == "done" for r in results.values()) if results else True
+    return {
+        "ok": ok, "tournament": tournament_name,
+        "roles": results, "bytes_freed": bytes_freed,
+    }
+
+
+def tier_discipline_async(config: PipelineConfig, *, roles=("work", "output")):
+    """Run tier_discipline in a daemon thread; UI polls get_tiering_status."""
+    _set_tiering_status(
+        config.discipline, state="running", error=None,
+        roles=list(roles), finished_at=None,
+    )
+
+    def _worker():
+        try:
+            out = tier_discipline(config, roles=roles)
+            _set_tiering_status(
+                config.discipline,
+                state="done" if out.get("ok") else "error",
+                error=out.get("error"),
+                bytes_freed=out.get("bytes_freed", 0),
+                tournament=out.get("tournament"),
+                finished_at=_now_iso(),
+            )
+        except Exception as exc:  # daemon thread - never crash silently
+            _set_tiering_status(
+                config.discipline, state="error",
+                error=str(exc), finished_at=_now_iso(),
+            )
+
+    t = threading.Thread(
+        target=_worker, name=f"tier-{config.discipline}", daemon=True,
+    )
+    t.start()
+    return t
+
+
+def run_retention_sweep_for(config: PipelineConfig) -> Dict[str, object]:
+    """Delete staged tournament folders older than the configured retention."""
+    from archive import sweep_staging
+
+    staging_root = config.tiering_staging_root
+    if staging_root is None:
+        return {"ok": False, "error": "tiering.staging_root nicht konfiguriert"}
+    res = sweep_staging(
+        staging_root, retention_days=config.tiering_retention_days,
+    )
+    return {
+        "ok": True, "deleted": res.deleted,
+        "bytes_freed": res.bytes_freed, "scanned": res.scanned,
+    }
+
+
+def _now_iso() -> str:
+    from pipeline.status_file import now_iso
+    return now_iso()
+
+
+def _reset_tiering_status_for_tests() -> None:
+    with _tiering_lock:
+        _tiering_status.clear()
+
+
+# ---- Internet speedtest (M3 / B3) -----------------------------------------
+
+def _data_dir_for(configs: Dict[str, PipelineConfig]) -> Optional[Path]:
+    """The shared data dir (where configs + the speedtest result live)."""
+    for cfg in configs.values():
+        if cfg.source_path is not None:
+            return cfg.source_path.parent
+    return None
+
+
+def get_last_speedtest(configs: Dict[str, PipelineConfig]) -> Optional[Dict[str, object]]:
+    """The most recent persisted speedtest result, or None if never run."""
+    from watcher.speedtest import read_speedtest, speedtest_path_for
+    data_dir = _data_dir_for(configs)
+    if data_dir is None:
+        return None
+    result = read_speedtest(speedtest_path_for(data_dir))
+    return result.to_dict() if result else None
+
+
+def run_and_store_speedtest(
+    configs: Dict[str, PipelineConfig],
+) -> Optional[Dict[str, object]]:
+    """Run the Ookla speedtest and persist it next to the configs."""
+    from watcher.speedtest import (
+        run_speedtest, speedtest_path_for, write_speedtest,
+    )
+    data_dir = _data_dir_for(configs)
+    if data_dir is None:
+        return None
+    result = run_speedtest()
+    write_speedtest(speedtest_path_for(data_dir), result)
+    return result.to_dict()
 
 
 # ---- Storage --------------------------------------------------------------

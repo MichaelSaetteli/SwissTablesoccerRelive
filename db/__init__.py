@@ -38,6 +38,14 @@ from .control import (
     set_run_paused,
     set_run_priority,
 )
+from .estimates import (
+    PIPELINE_PHASES,
+    PhaseEstimate,
+    PhaseRate,
+    ProcessingEstimate,
+    estimate_processing,
+    phase_rates,
+)
 
 __all__ = [
     "open_db", "ensure_schema", "db_path_for",
@@ -50,4 +58,6 @@ __all__ = [
     "clear_phases_for_restart", "is_paused", "list_jobs",
     "mark_restart_started", "resolve_restart_target",
     "set_paused", "set_run_paused", "set_run_priority",
+    "PIPELINE_PHASES", "PhaseEstimate", "PhaseRate",
+    "ProcessingEstimate", "estimate_processing", "phase_rates",
 ]

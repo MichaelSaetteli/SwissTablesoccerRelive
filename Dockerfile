@@ -17,13 +17,27 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # System dependencies. ffmpeg is the only heavy binary; tini gives us a
 # proper PID 1 so SIGTERM from `docker stop` reaches our Python process.
+# curl is used only to fetch the Ookla speedtest binary below.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
         tini \
         ca-certificates \
         tzdata \
+        curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Official Ookla speedtest CLI (static x86_64 binary). Powers the daily
+# idle-gated internet-speed probe (Dashboard M3 / B3). We pull the static
+# tarball instead of adding Ookla's apt repo to keep the image lean; the
+# license is accepted non-interactively at runtime via --accept-license.
+ARG OOKLA_VERSION=1.2.0
+RUN curl -fsSL \
+        "https://install.speedtest.net/app/cli/ookla-speedtest-${OOKLA_VERSION}-linux-x86_64.tgz" \
+        -o /tmp/speedtest.tgz \
+    && tar -xzf /tmp/speedtest.tgz -C /usr/local/bin speedtest \
+    && chmod +x /usr/local/bin/speedtest \
+    && rm -f /tmp/speedtest.tgz
 
 WORKDIR /app
 

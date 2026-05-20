@@ -15,8 +15,17 @@ from .archiver import (
     execute_archive,
     sha256_of,
 )
+from .tiering import (
+    STAGEABLE_ROLES,
+    SweepResult,
+    staged_age_epoch,
+    stage_to_hdd,
+    sweep_staging,
+)
 
 __all__ = [
     "ArchiveError", "ArchivePlan", "ArchiveResult",
     "build_archive_plan", "execute_archive", "sha256_of",
+    "STAGEABLE_ROLES", "SweepResult", "staged_age_epoch",
+    "stage_to_hdd", "sweep_staging",
 ]

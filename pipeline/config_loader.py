@@ -13,7 +13,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -86,6 +86,7 @@ class PipelineConfig:
     filename_constants: FilenameConstants
     ffmpeg: Dict[str, Any] = field(default_factory=dict)
     youtube: Dict[str, Any] = field(default_factory=dict)
+    tiering: Dict[str, Any] = field(default_factory=dict)
     source_path: Path | None = None
 
     @property
@@ -95,6 +96,20 @@ class PipelineConfig:
     @property
     def max_files_per_folder(self) -> int:
         return int(self.ffmpeg.get("max_files_per_folder", 24))
+
+    # ---- M3 / Block A: SSD->HDD tiering ----
+    @property
+    def tiering_staging_root(self) -> Optional[Path]:
+        raw = self.tiering.get("staging_root")
+        return Path(raw) if raw else None
+
+    @property
+    def tiering_retention_days(self) -> int:
+        return int(self.tiering.get("retention_days", 7))
+
+    @property
+    def tiering_auto_enabled(self) -> bool:
+        return bool(self.tiering.get("auto_enabled", False))
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +173,7 @@ def load_config(path: str | os.PathLike) -> PipelineConfig:
         filename_constants=constants,
         ffmpeg=data.get("ffmpeg", {}),
         youtube=data.get("youtube", {}),
+        tiering=data.get("tiering", {}),
         source_path=source,
     )
 
@@ -189,6 +205,7 @@ def save_config(config: PipelineConfig) -> None:
         "filename_constants": config.filename_constants.as_dict(),
         "ffmpeg": dict(config.ffmpeg),
         "youtube": dict(config.youtube),
+        "tiering": dict(config.tiering),
     }
 
     path = config.source_path

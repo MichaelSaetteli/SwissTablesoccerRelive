@@ -51,6 +51,11 @@
           <p>Verarbeitet: <span data-field="folders_processed">--</span></p>
           <p>Gestartet: <span data-field="started_at">--</span></p>
           <p>Aktualisiert: <span data-field="updated_at">--</span></p>
+          <p class="estimate">
+            Verarbeitungs-Prognose:
+            <strong data-field="estimate_value">--</strong>
+            <span class="hint" data-field="estimate_hint"></span>
+          </p>
           <p class="error" data-field="error" hidden></p>
         </section>
 
@@ -113,6 +118,27 @@
           </button>
           <h3>Log</h3>
           <pre class="log" data-field="log_tail"></pre>
+        </section>
+
+        <!-- 2b. Speicher-Tiering (SSD -> HDD) -->
+        <section class="card tiering-card">
+          <h2>Speicher (SSD -> HDD)</h2>
+          <p class="hint">
+            Verschiebt verarbeitete Daten verifiziert auf die HDD, um die
+            SSD freizuhalten. Erst nach erfolgreicher SHA-256-Pruefung wird
+            die SSD geleert. Retention loescht alte Staging-Ordner nach
+            {{ '%d'|format(7) }} Tagen (konfigurierbar).
+          </p>
+          <p class="tiering-status">
+            Status: <strong data-field="tiering_state">--</strong>
+            <span data-field="tiering_detail" class="hint"></span>
+          </p>
+          <button data-action="tiering-stage" class="secondary">
+            Auf HDD verschieben
+          </button>
+          <button data-action="tiering-sweep" class="secondary">
+            Aufraeumen (Retention)
+          </button>
         </section>
 
         <!-- 3a. Datei-Benennung (Filename-Konstanten) -->
@@ -212,6 +238,7 @@
           <p>Zustand: <strong data-field="upload_state">--</strong></p>
           <p>Fortschritt: <span data-field="upload_progress">--</span></p>
           <p>Aktuelle Datei: <span data-field="upload_current">--</span></p>
+          <p>Tempo: <span data-field="upload_speed">--</span></p>
           <progress data-field="upload_bar" max="100" value="0"
                     style="width: 100%;"></progress>
           <p class="error" data-field="upload_error" hidden></p>
@@ -290,6 +317,16 @@
       <ul class="volumes-list" data-field="volumes_list">
         <li class="empty">Wird geladen ...</li>
       </ul>
+    </section>
+
+    <section class="card speedtest-card">
+      <h2>Internet-Tempo</h2>
+      <p class="hint">
+        Taeglicher Speedtest (Ookla), laeuft nur bei Leerlauf. Misst den
+        Netzwerk-Pfad des NAS - das tatsaechliche Upload-Tempo zu YouTube
+        wird waehrend echter Uploads separat angezeigt.
+      </p>
+      <p data-field="speedtest_line">Noch keine Messung.</p>
     </section>
 
     <section class="card archive-card">
