@@ -652,6 +652,27 @@ def _start_watchers(configs: Dict[str, PipelineConfig]) -> List[object]:
     return watchers
 
 
+def _start_tiering_scheduler(configs: Dict[str, PipelineConfig]):
+    """Spawn the idle-gated tiering scheduler (daily sweep + auto-stage)."""
+    from watcher.tiering_scheduler import TieringScheduler
+
+    def _upload_info(cfg):
+        st = services.get_upload_status(cfg)
+        return st.state, st.finished_at
+
+    scheduler = TieringScheduler(
+        configs,
+        idle_fn=services.is_system_idle,
+        sweep_fn=services.run_retention_sweep_for,
+        stage_fn=services.tier_discipline,
+        upload_info_fn=_upload_info,
+    )
+    scheduler.start()
+    print("[tiering] scheduler started (idle-gated daily sweep + auto-stage)",
+          file=sys.stderr)
+    return scheduler
+
+
 def _serve(app: Flask, host: str, port: int) -> None:
     """Production-grade WSGI server. Falls back to Flask's dev server if
     waitress is not importable (only happens in bare local dev)."""
@@ -680,6 +701,10 @@ def _main(argv: List[str]) -> int:
     if os.environ.get("ENABLE_WATCHER", "1") != "0":
         watchers = _start_watchers(configs)
 
+    scheduler = None
+    if os.environ.get("ENABLE_TIERING_SCHEDULER", "1") != "0":
+        scheduler = _start_tiering_scheduler(configs)
+
     app = create_app(configs)
     host = os.environ.get("WEB_HOST", "0.0.0.0")
     port = int(os.environ.get("WEB_PORT", "5000"))
@@ -690,6 +715,11 @@ def _main(argv: List[str]) -> int:
         for watcher in watchers:
             try:
                 watcher.stop()
+            except Exception:  # pragma: no cover - best-effort shutdown
+                pass
+        if scheduler is not None:
+            try:
+                scheduler.stop()
             except Exception:  # pragma: no cover - best-effort shutdown
                 pass
     return 0
