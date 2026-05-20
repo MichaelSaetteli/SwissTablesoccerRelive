@@ -22,6 +22,7 @@ from watcher.pipeline_runner import (
 )
 from watcher.status import (
     PipelineStatus,
+    State,
     StatusWriter,
     read_status,
     status_path_for,
@@ -32,6 +33,7 @@ from youtube.metadata_builder import (
     quota_hint,
 )
 from youtube.upload_status import (
+    UploadState,
     UploadStatus,
     UploadStatusWriter,
     read_upload_status,
@@ -537,6 +539,153 @@ def get_processing_estimate_for(config: PipelineConfig) -> Dict[str, object]:
 
 def _reset_backlog_cache_for_tests() -> None:
     _backlog_cache.clear()
+
+
+# ---- Tiering / Auto-Cleanup (M3 / Block A) --------------------------------
+
+_BUSY_PIPELINE_STATES = {
+    State.MOVING, State.ORGANIZING, State.RENAMING, State.MERGING,
+}
+_BUSY_UPLOAD_STATES = {UploadState.PREPARING, UploadState.UPLOADING}
+
+# In-memory tiering status per discipline; the UI polls it via /api/state.
+_tiering_status: Dict[str, Dict[str, object]] = {}
+_tiering_lock = threading.Lock()
+
+
+def is_discipline_busy(config: PipelineConfig) -> bool:
+    """True while this discipline is mid-pipeline or mid-upload."""
+    if get_status(config).state in _BUSY_PIPELINE_STATES:
+        return True
+    if get_upload_status(config).state in _BUSY_UPLOAD_STATES:
+        return True
+    return False
+
+
+def is_system_idle(configs: Dict[str, PipelineConfig]) -> bool:
+    """True only when no discipline is processing or uploading."""
+    return not any(is_discipline_busy(c) for c in configs.values())
+
+
+def get_tiering_status(config: PipelineConfig) -> Dict[str, object]:
+    with _tiering_lock:
+        return dict(_tiering_status.get(
+            config.discipline, {"state": "idle"}
+        ))
+
+
+def _set_tiering_status(discipline: str, **fields: object) -> None:
+    with _tiering_lock:
+        cur = dict(_tiering_status.get(discipline, {}))
+        cur.update(fields)
+        _tiering_status[discipline] = cur
+
+
+def tier_discipline(
+    config: PipelineConfig,
+    *,
+    roles=("work", "output"),
+) -> Dict[str, object]:
+    """Verified move of this discipline's work_/output_ dirs to HDD staging.
+
+    Synchronous core (used by the async wrapper + tests). Refuses to run
+    while the discipline is busy, and is a no-op error when no staging root
+    is configured.
+    """
+    from archive import stage_to_hdd
+
+    staging_root = config.tiering_staging_root
+    if staging_root is None:
+        return {"ok": False, "error": "tiering.staging_root nicht konfiguriert"}
+    if is_discipline_busy(config):
+        return {"ok": False, "error": "Disziplin ist beschaeftigt"}
+
+    active = get_active_tournament_for(config) or {}
+    tournament_name = str(active.get("name") or f"Untagged-{config.discipline}")
+    tournament_id = active.get("id")
+    role_dirs = {"work": config.paths.work, "output": config.paths.output}
+
+    results: Dict[str, object] = {}
+    bytes_freed = 0
+    for role in roles:
+        src = role_dirs.get(role)
+        if src is None or not src.is_dir():
+            continue
+        res = stage_to_hdd(
+            tournament_name=tournament_name, discipline=config.discipline,
+            role=role, source_dir=src, staging_root=staging_root,
+            tournament_id=tournament_id,
+        )
+        results[role] = {
+            "state": res.state,
+            "files_verified": res.files_verified,
+            "bytes_copied": res.bytes_copied,
+            "error": res.error,
+        }
+        if res.state == "done":
+            bytes_freed += res.bytes_copied
+    ok = all(r["state"] == "done" for r in results.values()) if results else True
+    return {
+        "ok": ok, "tournament": tournament_name,
+        "roles": results, "bytes_freed": bytes_freed,
+    }
+
+
+def tier_discipline_async(config: PipelineConfig, *, roles=("work", "output")):
+    """Run tier_discipline in a daemon thread; UI polls get_tiering_status."""
+    _set_tiering_status(
+        config.discipline, state="running", error=None,
+        roles=list(roles), finished_at=None,
+    )
+
+    def _worker():
+        try:
+            out = tier_discipline(config, roles=roles)
+            _set_tiering_status(
+                config.discipline,
+                state="done" if out.get("ok") else "error",
+                error=out.get("error"),
+                bytes_freed=out.get("bytes_freed", 0),
+                tournament=out.get("tournament"),
+                finished_at=_now_iso(),
+            )
+        except Exception as exc:  # daemon thread - never crash silently
+            _set_tiering_status(
+                config.discipline, state="error",
+                error=str(exc), finished_at=_now_iso(),
+            )
+
+    t = threading.Thread(
+        target=_worker, name=f"tier-{config.discipline}", daemon=True,
+    )
+    t.start()
+    return t
+
+
+def run_retention_sweep_for(config: PipelineConfig) -> Dict[str, object]:
+    """Delete staged tournament folders older than the configured retention."""
+    from archive import sweep_staging
+
+    staging_root = config.tiering_staging_root
+    if staging_root is None:
+        return {"ok": False, "error": "tiering.staging_root nicht konfiguriert"}
+    res = sweep_staging(
+        staging_root, retention_days=config.tiering_retention_days,
+    )
+    return {
+        "ok": True, "deleted": res.deleted,
+        "bytes_freed": res.bytes_freed, "scanned": res.scanned,
+    }
+
+
+def _now_iso() -> str:
+    from pipeline.status_file import now_iso
+    return now_iso()
+
+
+def _reset_tiering_status_for_tests() -> None:
+    with _tiering_lock:
+        _tiering_status.clear()
 
 
 # ---- Storage --------------------------------------------------------------

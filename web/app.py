@@ -145,6 +145,7 @@ def api_state(discipline: str):
         "active_tournament": services.get_active_tournament_for(config),
         "processing_estimate": services.get_processing_estimate_for(config),
         "upload_throughput": services.get_upload_throughput_for(config),
+        "tiering": services.get_tiering_status(config),
     })
 
 
@@ -244,6 +245,33 @@ def api_pipeline_control(discipline: str):
         "discipline": discipline,
         "paused": services.is_pipeline_paused(config),
     })
+
+
+@api_bp.route("/tiering/<discipline>", methods=["POST"])
+@login_required
+def api_tiering_start(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    if config.tiering_staging_root is None:
+        return jsonify({"error": "tiering.staging_root nicht konfiguriert"}), 400
+    if services.is_discipline_busy(config):
+        return jsonify({"error": "Disziplin ist beschaeftigt"}), 409
+    services.tier_discipline_async(config)
+    return jsonify({"discipline": discipline, "started": True}), 202
+
+
+@api_bp.route("/tiering/<discipline>/sweep", methods=["POST"])
+@login_required
+def api_tiering_sweep(discipline: str):
+    config = _get_config_or_404(discipline)
+    if config is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    # Idle-gate the sweep across ALL disciplines (decision #4).
+    if not services.is_system_idle(_configs()):
+        return jsonify({"error": "System beschaeftigt - Sweep abgelehnt"}), 409
+    result = services.run_retention_sweep_for(config)
+    return jsonify(result), 200 if result.get("ok") else 400
 
 
 @api_bp.route("/jobs/<discipline>")

@@ -120,6 +120,27 @@
           <pre class="log" data-field="log_tail"></pre>
         </section>
 
+        <!-- 2b. Speicher-Tiering (SSD -> HDD) -->
+        <section class="card tiering-card">
+          <h2>Speicher (SSD -> HDD)</h2>
+          <p class="hint">
+            Verschiebt verarbeitete Daten verifiziert auf die HDD, um die
+            SSD freizuhalten. Erst nach erfolgreicher SHA-256-Pruefung wird
+            die SSD geleert. Retention loescht alte Staging-Ordner nach
+            {{ '%d'|format(7) }} Tagen (konfigurierbar).
+          </p>
+          <p class="tiering-status">
+            Status: <strong data-field="tiering_state">--</strong>
+            <span data-field="tiering_detail" class="hint"></span>
+          </p>
+          <button data-action="tiering-stage" class="secondary">
+            Auf HDD verschieben
+          </button>
+          <button data-action="tiering-sweep" class="secondary">
+            Aufraeumen (Retention)
+          </button>
+        </section>
+
         <!-- 3a. Datei-Benennung (Filename-Konstanten) -->
         <section class="card filename-card">
           <h2>Datei-Benennung</h2>

@@ -75,6 +75,7 @@
         renderUploadThroughput(panel, data.upload_throughput);
         renderActiveTournament(panel, data.active_tournament);
         renderEstimate(panel, data.processing_estimate);
+        renderTiering(panel, data.tiering);
       }
       if (histRes.ok) {
         renderHistory(panel, await histRes.json());
@@ -111,6 +112,24 @@
       txt = `Ø ${t.mbit_s.toFixed(2)} Mbit/s (abgeschlossen)`;
     }
     el.textContent = txt;
+  }
+
+  function renderTiering(panel, t) {
+    const stateEl = panel.querySelector('[data-field="tiering_state"]');
+    const detailEl = panel.querySelector('[data-field="tiering_detail"]');
+    if (!stateEl) return;
+    const state = (t && t.state) || "idle";
+    const labels = { idle: "bereit", running: "laeuft...",
+                     done: "abgeschlossen", error: "Fehler" };
+    stateEl.textContent = labels[state] || state;
+    if (!detailEl) return;
+    if (state === "done" && t.bytes_freed != null) {
+      detailEl.textContent = ` (${fmtBytes(t.bytes_freed)} verschoben)`;
+    } else if (state === "error" && t.error) {
+      detailEl.textContent = ` (${t.error})`;
+    } else {
+      detailEl.textContent = "";
+    }
   }
 
   function renderEstimate(panel, est) {
@@ -428,6 +447,48 @@
           }
         } finally {
           setTimeout(() => { btn.disabled = false; }, 1500);
+        }
+      });
+    });
+
+    // ----- Tiering: move-to-HDD + retention sweep -----
+    document.querySelectorAll('[data-action="tiering-stage"]').forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const discipline = btn.closest(".tabpanel").dataset.discipline;
+        if (!confirm(
+          "Verarbeitete Daten dieser Disziplin verifiziert auf die HDD " +
+          "verschieben? Die SSD-Quelle wird erst nach erfolgreicher Pruefung " +
+          "geleert.")) return;
+        btn.disabled = true;
+        try {
+          const res = await fetch(`/api/tiering/${discipline}`, {
+            method: "POST", credentials: "same-origin",
+          });
+          if (!res.ok) alert("Verschieben abgelehnt: " + (await res.text()));
+        } finally {
+          setTimeout(() => { btn.disabled = false; }, 1500);
+        }
+      });
+    });
+    document.querySelectorAll('[data-action="tiering-sweep"]').forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const discipline = btn.closest(".tabpanel").dataset.discipline;
+        if (!confirm(
+          "Abgelaufene Staging-Ordner auf der HDD endgueltig loeschen?")) return;
+        btn.disabled = true;
+        try {
+          const res = await fetch(`/api/tiering/${discipline}/sweep`, {
+            method: "POST", credentials: "same-origin",
+          });
+          const body = await res.json().catch(() => ({}));
+          if (res.ok) {
+            alert(`Aufgeraeumt: ${(body.deleted || []).length} Ordner, ` +
+                  `${fmtBytes(body.bytes_freed || 0)} frei.`);
+          } else {
+            alert("Sweep abgelehnt: " + (body.error || res.status));
+          }
+        } finally {
+          setTimeout(() => { btn.disabled = false; }, 1000);
         }
       });
     });
