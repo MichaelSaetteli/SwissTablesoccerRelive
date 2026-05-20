@@ -7,6 +7,7 @@ spinning up a Flask test client.
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -425,6 +426,59 @@ def get_run_history_for(
             "failed_runs": sum(1 for r in runs if r.state == "error"),
         },
     }
+
+
+# ---- Processing-time estimate (M3 / B2) -----------------------------------
+
+# eingang can hold 1-2 TB across many files; the dashboard polls every 3 s,
+# so we cache the directory scan and only re-measure every _BACKLOG_TTL_S.
+_BACKLOG_TTL_S = 30.0
+_backlog_cache: Dict[str, tuple] = {}
+
+
+def _eingang_backlog_bytes(config: PipelineConfig) -> int:
+    """Sum of .mp4 bytes still waiting in eingang, cached for _BACKLOG_TTL_S."""
+    eingang = config.paths.eingang
+    key = str(eingang)
+    now = time.monotonic()
+    cached = _backlog_cache.get(key)
+    if cached is not None and (now - cached[0]) < _BACKLOG_TTL_S:
+        return cached[1]
+
+    total = 0
+    if eingang.is_dir():
+        for p in eingang.rglob("*.mp4"):
+            try:
+                if p.is_file():
+                    total += p.stat().st_size
+            except OSError:
+                continue
+    _backlog_cache[key] = (now, total)
+    return total
+
+
+def get_processing_estimate_for(config: PipelineConfig) -> Dict[str, object]:
+    """Estimated processing time for the footage currently in eingang.
+
+    ``input_bytes`` is the measured eingang backlog; ``total_seconds`` is
+    ``None`` while the estimator is still calibrating (no completed run with
+    a known size yet).
+    """
+    from db import estimate_processing, open_db
+    backlog = _eingang_backlog_bytes(config)
+    db_path = _db_path_for(config)
+    if db_path is None:
+        return {
+            "input_bytes": backlog, "total_seconds": None,
+            "per_phase": [], "sample_runs": 0, "calibrating": True,
+        }
+    conn = open_db(db_path)
+    est = estimate_processing(conn, backlog, discipline=config.discipline)
+    return est.to_dict()
+
+
+def _reset_backlog_cache_for_tests() -> None:
+    _backlog_cache.clear()
 
 
 # ---- Storage --------------------------------------------------------------

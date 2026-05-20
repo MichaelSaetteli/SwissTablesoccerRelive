@@ -143,6 +143,7 @@ def api_state(discipline: str):
         "upload": services.get_upload_status(config).to_dict(),
         "files": services.list_output_files(config),
         "active_tournament": services.get_active_tournament_for(config),
+        "processing_estimate": services.get_processing_estimate_for(config),
     })
 
 

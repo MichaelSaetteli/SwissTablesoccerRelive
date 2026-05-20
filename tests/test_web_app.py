@@ -189,7 +189,10 @@ def test_api_state_returns_combined_payload(client) -> None:
     res = client.get("/api/state/Doppel")
     assert res.status_code == 200
     data = res.get_json()
-    assert set(data.keys()) == {"pipeline", "upload", "files", "active_tournament"}
+    assert set(data.keys()) == {
+        "pipeline", "upload", "files", "active_tournament",
+        "processing_estimate",
+    }
     assert data["pipeline"]["discipline"] == "Doppel"
     assert data["pipeline"]["state"] == State.IDLE
     assert data["upload"]["discipline"] == "Doppel"

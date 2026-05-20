@@ -43,6 +43,15 @@
     if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
     return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
   }
+  function fmtDuration(seconds) {
+    const s = Math.round(seconds);
+    if (s < 60) return `${s} s`;
+    const m = Math.round(s / 60);
+    if (m < 60) return `${m} min`;
+    const h = Math.floor(m / 60);
+    const rem = m % 60;
+    return rem ? `${h} h ${rem} min` : `${h} h`;
+  }
 
   /**
    * Single combined poll - replaces the previous two parallel fetches
@@ -64,6 +73,7 @@
         renderFiles(panel, discipline, data.files);
         renderUploadStatus(panel, data.upload);
         renderActiveTournament(panel, data.active_tournament);
+        renderEstimate(panel, data.processing_estimate);
       }
       if (histRes.ok) {
         renderHistory(panel, await histRes.json());
@@ -86,6 +96,28 @@
     } else {
       name.textContent = t.name;
       if (badge) badge.textContent = t.is_auto_created ? " (auto)" : "";
+    }
+  }
+
+  function renderEstimate(panel, est) {
+    const valEl = panel.querySelector('[data-field="estimate_value"]');
+    const hintEl = panel.querySelector('[data-field="estimate_hint"]');
+    if (!valEl) return;
+    if (hintEl) hintEl.textContent = "";
+    if (!est) { valEl.textContent = "--"; return; }
+
+    const bytes = est.input_bytes || 0;
+    if (bytes === 0) {
+      valEl.textContent = "kein Material im Eingang";
+      return;
+    }
+    if (est.calibrating || est.total_seconds == null) {
+      valEl.textContent = `kalibriert noch (${fmtBytes(bytes)} im Eingang)`;
+      return;
+    }
+    valEl.textContent = `~ ${fmtDuration(est.total_seconds)} fuer ${fmtBytes(bytes)}`;
+    if (hintEl && (est.sample_runs || 0) < 3) {
+      hintEl.textContent = ` (grobe Schaetzung, erst ${est.sample_runs} Run(s) als Basis)`;
     }
   }
 
