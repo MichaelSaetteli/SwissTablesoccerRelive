@@ -1,0 +1,426 @@
+# Installation auf der Synology DS1522+
+
+Diese Anleitung beschreibt die einmalige Einrichtung der Video-Pipeline auf
+einer Synology DS1522+ (DSM 7.2 oder neuer). Sie folgt der Build-Reihenfolge
+aus `PROJEKT_BRIEFING.md` Abschnitt 9.
+
+> Voraussetzung: Du hast Admin-Zugriff auf das DSM-Webinterface und kennst
+> das Passwort des `admin`-Accounts.
+
+---
+
+## 1. Voraussetzungen pruefen
+
+| Komponente | Anforderung |
+|---|---|
+| DSM | 7.2 oder neuer |
+| Container Manager | Aus dem **Paket-Zentrum** installiert |
+| Speicher | Mindestens 100 GB frei auf `/volume1/` (Roh-Footage 1-2 TB pro Lauf) |
+| RAM | 8 GB (vorhanden auf DS1522+) |
+| Netzwerk | 10GbE-Karte (E10G22-T1-Mini) installiert und konfiguriert |
+
+Pruefe DSM-Version: **DSM-Systemsteuerung -> Info-Center -> Allgemein -> DSM-Version**.
+
+---
+
+## 2. SSH auf der DS1522+ aktivieren
+
+DSM-Systemsteuerung -> **Terminal & SNMP** -> **SSH-Dienst aktivieren**, Port 22.
+Anschliessend von einem Laptop verbinden:
+
+```bash
+ssh admin@<NAS-IP>
+sudo -i      # Root-Shell fuer die folgenden Schritte
+```
+
+---
+
+## 3. Ordner-Struktur anlegen
+
+Auf der NAS einmalig die komplette Verzeichnishierarchie anlegen (alle
+Pfade liegen unter `/volume1/video-pipeline/`):
+
+```bash
+mkdir -p /volume1/video-pipeline/{eingang_doppel,eingang_einzel}
+mkdir -p /volume1/video-pipeline/{work_doppel,work_einzel}
+mkdir -p /volume1/video-pipeline/{output_doppel,output_einzel}
+mkdir -p /volume1/video-pipeline/logs
+
+# Container laeuft als uid 1000 (siehe Dockerfile) - muss schreiben duerfen.
+chown -R 1000:1000 /volume1/video-pipeline
+```
+
+---
+
+## 4. SMB-Freigaben fuer die Laptops
+
+DSM-Systemsteuerung -> **Freigegebener Ordner** -> **Erstellen**:
+
+| Name | Pfad | Berechtigung |
+|---|---|---|
+| `eingang_doppel` | `/volume1/video-pipeline/eingang_doppel` | Lese-/Schreib-Zugriff fuer Aufnahme-Laptop |
+| `eingang_einzel` | `/volume1/video-pipeline/eingang_einzel` | Lese-/Schreib-Zugriff fuer Aufnahme-Laptop |
+
+Anschliessend auf dem Aufnahme-Laptop einbinden:
+
+* macOS: **Finder -> Go -> Connect to Server** -> `smb://<NAS-IP>/eingang_doppel`
+* Windows: `\\<NAS-IP>\eingang_doppel` als Netzlaufwerk verbinden
+
+> Tipp: ueber 10GbE schiebt der Aufnahme-Laptop 1-2 TB in unter 30 Minuten.
+
+---
+
+## 5. Repository auf die DS1522+ holen
+
+```bash
+cd /volume1/docker         # uebliches Verzeichnis fuer Container-Quellen
+git clone https://github.com/MichaelSaetteli/SwissTablesoccerRelive.git
+cd SwissTablesoccerRelive
+```
+
+(Alternativ: Repository als ZIP herunterladen und entpacken.)
+
+---
+
+## 6. Configs anpassen
+
+Beispiel-Configs aus dem Repo ins `/data`-Verzeichnis kopieren und
+anpassen:
+
+```bash
+mkdir -p /volume1/SDD/video-pipeline-config
+cp config/config_doppel.json /volume1/SDD/video-pipeline-config/config_doppel.json
+cp config/config_einzel.json /volume1/SDD/video-pipeline-config/config_einzel.json
+```
+
+In jeder Datei:
+
+* `filename_constants.jahr`, `sts_nummer`, `turniername`, `disziplin`, `part`
+  passen die Standardwerte fuer die Output-Dateinamen an. Diese koennen
+  spaeter auch komfortabel ueber das Web-Interface aenderbar gemacht
+  werden ("Datei-Benennung"-Sektion).
+* `paths.*` zeigt auf absolute Synology-Volume-Pfade. Default-Layout
+  (SSD fuer Hot-Path, HDD fuer Logs):
+  * `eingang/work/output` -> `/volume1/SDD/eingang_*`, `work_*`, `output_*`
+  * `logs` -> `/volume3/HDD11TB/pipeline_logs` (langlebige FFmpeg-Stderr-Logs)
+* `docker-compose.yml` mountet `/volume1`, `/volume2`, `/volume3` als
+  identische Pfade in den Container, d.h. die Pfade in der Config gelten
+  1:1 sowohl auf dem Host als auch im Container.
+* `enabled: false` setzen, wenn die jeweilige Disziplin gerade nicht
+  produziert wird (Tab erscheint dann grau).
+
+---
+
+## 7. Secrets in `.env` setzen (NICHT in docker-compose.yml)
+
+Die `docker-compose.yml` im Repo ist generisch und wird **nie vom
+Operator editiert** - sonst kollidiert sie beim naechsten `git pull`.
+Stattdessen werden alle Secrets in einer `.env` neben der Compose-Datei
+abgelegt, die per `.gitignore` ausgeschlossen ist.
+
+```bash
+cd /volume1/SDD/projects/SwissTablesoccerRelive
+cp .env.example .env
+# Datei mit einem Texteditor oeffnen, WEB_PASSWORD und WEB_SECRET_KEY setzen
+```
+
+Werte generieren (auf dem Laptop oder via DSM Aufgabenplaner):
+
+```bash
+echo "WEB_PASSWORD=$(openssl rand -base64 18)"
+echo "WEB_SECRET_KEY=$(openssl rand -hex 32)"
+```
+
+docker compose liest `.env` automatisch beim `up`. Wenn `WEB_PASSWORD`
+oder `WEB_SECRET_KEY` fehlen, schlaegt der Start **fail-fast** mit
+einer klaren Fehlermeldung statt mit `changeme` weiterzulaufen.
+
+### Migration vom alten Setup
+
+Falls deine NAS bereits eine modifizierte `docker-compose.yml` enthaelt
+(z.B. mit dem echten Passwort eingebaut), einmalig:
+
+```bash
+cd /volume1/SDD/projects/SwissTablesoccerRelive
+# 1. Aktuelle Passwoerter aus der lokalen Datei extrahieren
+grep -E "WEB_(USERNAME|PASSWORD|SECRET_KEY)" docker-compose.yml \
+  | awk -F': ' '{print $1"="$2}' > .env
+# 2. Lokale Edits verwerfen, repo-Stand uebernehmen
+git checkout docker-compose.yml
+# 3. Jetzt klappt git pull immer
+git pull
+docker compose build && docker compose up -d
+```
+
+---
+
+## 8. Docker-Image bauen und Container starten
+
+```bash
+cd /volume1/docker/SwissTablesoccerRelive
+docker compose build
+docker compose up -d
+docker compose logs -f       # zum Mitschauen, Ctrl-C beendet das Tailing
+```
+
+Die Logs sollten zeigen:
+
+```
+[watcher] Doppel: started on /volume1/SDD/eingang_doppel
+[watcher] Einzel: started on /volume1/SDD/eingang_einzel
+[web] waitress serving on http://0.0.0.0:5000
+```
+
+Im DSM **Container Manager -> Container** sollte `video-pipeline` als
+"laeuft" auftauchen mit Healthcheck-Status "healthy" (nach ca. 30s).
+
+---
+
+## 9. Lokaler Web-Zugriff
+
+Im Browser auf einem Geraet im gleichen Netz:
+
+```
+http://<NAS-IP>:5000/
+```
+
+Login mit dem in Schritt 7 gesetzten Benutzer + Passwort. Du siehst die
+beiden Tabs **Doppel** und **Einzel**, beide auf Status `idle`.
+
+---
+
+## 10. Synology QuickConnect aktivieren (optional, Internet-Zugriff)
+
+DSM-Systemsteuerung -> **Externer Zugriff** -> **QuickConnect**:
+
+1. Bei Synology-Konto anmelden (oder neues anlegen)
+2. **QuickConnect aktivieren** ankreuzen
+3. Eindeutige `quickconnect.to`-ID waehlen (z.B. `tfcsg-pipeline`)
+
+QuickConnect bringt Port 5000 ohne Portforwarding aus dem Internet
+erreichbar. URL danach: `https://<id>.quickconnect.to:5000` (oder ueber
+das Reverse-Proxy-Feature im DSM).
+
+> Sicherheitshinweis: das Web-Interface schuetzt nur ein einfaches
+> Login-Formular. Das gewaehlte Passwort sollte entsprechend stark sein.
+> Sessions werden mit `WEB_SECRET_KEY` signiert - rotiert man diesen,
+> werden alle aktiven Sessions ungueltig.
+
+---
+
+## 11. Google OAuth fuer YouTube-Upload einrichten
+
+Die DS1522+ hat keinen Browser, deshalb wird der einmalige OAuth-Flow auf
+einem Laptop ausgefuehrt und das Ergebnis-Token aufs NAS kopiert.
+
+### 11a. Google-Cloud-Projekt anlegen
+
+1. https://console.cloud.google.com/ -> neues Projekt **"video-pipeline-nas"**
+2. **APIs & Dienste -> Bibliothek** -> *YouTube Data API v3* aktivieren
+3. **APIs & Dienste -> Anmeldedaten** -> **OAuth-Client-ID erstellen**:
+   * Anwendungstyp: **Desktop**
+   * Name: `video-pipeline-nas`
+4. JSON-Datei herunterladen, lokal als `client_secrets.json` speichern
+
+### 11b. Token-Erzeugung auf dem Laptop
+
+```bash
+git clone https://github.com/MichaelSaetteli/SwissTablesoccerRelive.git
+cd SwissTablesoccerRelive
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m youtube.oauth_setup client_secrets.json youtube_token.json
+```
+
+Das oeffnet im Standardbrowser den Google-Anmeldebildschirm. Nach dem
+Bestaetigen landet `youtube_token.json` lokal.
+
+### 11c. Token aufs NAS kopieren
+
+```bash
+scp youtube_token.json admin@<NAS-IP>:/volume1/video-pipeline/youtube_token.json
+ssh admin@<NAS-IP> "sudo chown 1000:1000 /volume1/video-pipeline/youtube_token.json"
+```
+
+> Das Token enthaelt einen Refresh-Token mit unbegrenzter Lebensdauer.
+> **Niemals** ins Repository einchecken - die `.gitignore` blockt es
+> standardmaessig.
+
+---
+
+## 12. Erster Test-Durchlauf
+
+1. Auf dem Aufnahme-Laptop einen kleinen Test-Ordner `ET01` mit 2-3
+   MP4-Dateien per SMB nach `eingang_doppel` kopieren
+2. Im Web-Interface auf Tab **Doppel** der Status sollte innerhalb von
+   ca. 10 Sekunden (Quiescence-Window) auf `moving` -> `organizing` ->
+   `renaming` -> `merging` -> `done` wechseln
+3. In Sektion **Download** erscheint die fertige Datei
+   `2026 STS2 T01 Seetal Doppel.mp4` (Schema-Werte aus deiner Config)
+4. In **Datei-Benennung** koennen die Konstanten fuer den naechsten
+   Lauf angepasst werden (z.B. `Turniername`)
+5. In **YouTube-Upload** auf "Vorschau aktualisieren", die generierten
+   Titel pruefen und mit "Upload starten" zu YouTube hochladen
+
+---
+
+## 13. Wartung
+
+| Aufgabe | Befehl |
+|---|---|
+| Logs anschauen | `docker compose logs -f` |
+| Container neu starten | `docker compose restart` |
+| Image neu bauen (nach Update) | `docker compose build --pull && docker compose up -d` |
+| Speicherplatz pruefen | `du -sh /volume1/video-pipeline/*` |
+| Pipeline-Status auf Disk | `cat /volume1/video-pipeline/status_doppel.json` |
+
+### YouTube-Quota
+
+Standard-Quota: 10'000 Units pro Tag. Ein Video-Upload kostet 1'600 Units
+-> ca. 6 Videos pro Tag. Das Web-Interface zeigt einen Hinweis vor jedem
+Batch. Bei groesseren Turnieren ueber die Google-Cloud-Console eine
+Quota-Erhoehung beantragen (Formular unter "APIs & Dienste -> Kontingente").
+
+### Backups
+
+Empfohlen: das gesamte Verzeichnis `/volume1/video-pipeline/` (insbesondere
+die Configs + das `youtube_token.json`) regelmaessig per Hyper-Backup auf
+ein externes Ziel sichern.
+
+---
+
+## 14. Performance-Tuning fuer 1-2 TB Durchlaeufe
+
+Stream-Copy (`-c copy`) ist auf der DS1522+ I/O-bound, nicht CPU-bound.
+Software-Optimierungen (atomic ops, Disk-Space-Preflight, Watcher-Timer)
+sind bereits implementiert; die folgenden **Hardware-/Ops-Hebel** machen
+in der Praxis den Unterschied. Vor jedem Eingriff: `scripts/bench_io.sh`
+laufen lassen (kommt in einem spaeteren Schritt) und Werte teilen.
+
+### 14a. Read- und Write-Volume trennen
+
+Wirkungsvollste Einzelmassnahme. Aktuell liest und schreibt FFmpeg auf
+demselben Volume - die HDD-Koepfe wechseln staendig zwischen Lesen und
+Schreiben (Head-Thrashing). Bei zwei Volumes wird parallel gelesen und
+geschrieben.
+
+**Empfohlenes Layout der 5 Bays:**
+
+| Volume | Bays | RAID | Rolle |
+|---|---|---|---|
+| Volume 1 | 1 + 2 | RAID 1 (Mirror) | `/volume1/video-pipeline/eingang_*` + `work_*` |
+| Volume 2 | 3 + 4 + 5 | SHR (oder RAID 5) | `/volume2/video-pipeline/output_*` + `logs/` |
+
+In `config_doppel.json` / `config_einzel.json` die Pfade entsprechend
+aufteilen, z.B.:
+
+```json
+"paths": {
+  "eingang": "/volume1/eingang_doppel",
+  "work":    "/volume1/work_doppel",
+  "output":  "/volume2/output_doppel",
+  "logs":    "/volume2/logs"
+}
+```
+
+Wenn beide Volumes als `/data` in den Container gemountet werden,
+mounted in `docker-compose.yml`:
+
+```yaml
+volumes:
+  - /volume1:/volume1
+  - /volume2:/volume2
+```
+
+**Erwarteter Speedup:** 2-3x fuer die FFmpeg-Phase.
+
+### 14b. SSD-Cache aktivieren
+
+Synology unterstuetzt einen Read- oder Read-Write-SSD-Cache vor dem
+Volume. **DSM-Speicher-Manager -> Speicherpool -> SSD-Cache**.
+
+Empfohlen: 1-2 NVMe-M.2-SSDs in den dafuer vorgesehenen Slots der
+DS1522+, als Read-Write-Cache fuer das **work**-Volume.
+
+**Erwarteter Speedup:** 1.5-2x fuer Random-IO; bei reinem
+Sequenzial-IO (unser Fall) deutlich weniger Effekt - lohnt sich vor
+allem dann, wenn der Watcher stark fragmentierte SD-Karten-Files
+verarbeitet.
+
+### 14c. RAID-Wahl: SHR vs. RAID 10
+
+| RAID | Sequenzial-Write | Concurrent-Write | Kapazitaet |
+|---|---|---|---|
+| SHR (default) | gut | mittel | hoch |
+| RAID 5 | gut | mittel | hoch |
+| RAID 10 | sehr gut | sehr gut | halbiert |
+
+Bei 4 parallelen FFmpeg-Workern profitiert RAID 10 vom hoeheren
+parallelen Write-Durchsatz. Fuer reines Archivvolumen (wo
+Geschwindigkeit egal ist) bleibt SHR sinnvoll.
+
+**Erwarteter Speedup:** ~1.5x bei concurrent writes.
+
+### 14d. `max_workers` benchmarken
+
+In `config_*.json` -> `ffmpeg.max_workers`. Default = 4. Optimum
+haengt am RAID-Setup:
+
+| Setup | Empfohlen |
+|---|---|
+| Single HDD oder RAID 1 | 1-2 (mehr -> Head-Thrashing) |
+| RAID 5 / SHR | 2-4 |
+| RAID 10 | 4-6 |
+| SSD-only | 4-8 |
+
+Aenderung wirkt beim naechsten Pipeline-Lauf, kein Container-Restart noetig.
+
+### 14e. `quiet_seconds` an Upload-Zeit anpassen
+
+Default = 10 s. Bei 1-2 TB ueber SMB ueber 10GbE haelt der Aufnahme-Laptop
+die Verbindung typischerweise dauerhaft - das ist genug. Falls der Laptop
+zwischendurch laenger pausiert (z.B. SD-Karten-Wechsel), kann das den
+Watcher zu frueh ausloesen. Dann in `web/folder_watcher`-Aufruf bzw. ueber
+einen ENV-Override (TODO: noch nicht exponiert) auf 30-60 s anheben.
+
+### 14f. Netzwerk: 10GbE-Karte verifizieren
+
+```bash
+ssh admin@<NAS-IP>
+ip link show | grep -E "10G|MTU"
+ethtool eth1 | grep Speed   # eth1 ist normalerweise die 10GbE-Karte
+```
+
+Erwartet: `Speed: 10000Mb/s`. Wenn nicht: Switch + Kabel pruefen, in
+DSM-Systemsteuerung -> Netzwerk -> Netzwerkschnittstelle die Verbindung
+neu konfigurieren.
+
+---
+
+## 15. Troubleshooting
+
+**Container startet nicht:**
+```bash
+docker compose logs --tail 50
+```
+Haeufige Ursachen: fehlende Configs in `/volume1/video-pipeline/`,
+fehlende Schreibrechte (Schritt 3 nochmal: `chown -R 1000:1000 ...`).
+
+**Watcher loest nicht aus:**
+Pruefe in den Logs auf `[watcher] Doppel: started on ...`. Falls die
+Quiescence-Erkennung haengt: SMB-Client schliesst evtl. Files nicht
+sauber. Manuell ueber den "Pipeline starten"-Button im Web-Interface
+ausloesen.
+
+**FFmpeg-Fehler:**
+Status springt auf `error`. Im Web-Interface (Sektion Steuerung -> Log)
+oder via `docker compose logs` die FFmpeg-Stderr nachvollziehen. Meist
+ist eine MP4 korrupt - die betreffende Datei aus `work_*` entfernen und
+neu starten.
+
+**YouTube-Upload-Fehler "Login required":**
+`youtube_token.json` ist abgelaufen oder fehlt. Schritt 11 wiederholen.
+
+---
+
+Fertig. Bei Fragen / Issues: <https://github.com/MichaelSaetteli/SwissTablesoccerRelive/issues>

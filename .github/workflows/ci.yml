@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: pytest (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is what the Synology DS1522+ ships with; 3.11 is what the
+        # production Docker image uses. Both must keep passing.
+        python: ['3.9', '3.11']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install ffmpeg
+        # The merge_ffmpeg tests fake the runner, so ffmpeg is not strictly
+        # required - but having it lets us add real-integration tests later
+        # without touching CI again.
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+          pip install pytest-cov
+
+      - name: Run pytest
+        run: |
+          mkdir -p pytest-results
+          pytest tests/ -v --tb=short \
+            --cov=pipeline --cov=watcher --cov=web --cov=youtube \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --junitxml=pytest-results/junit.xml \
+          | tee pytest-results/pytest.log
+
+      - name: Upload test artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-py${{ matrix.python }}
+          path: |
+            pytest-results/
+            coverage.xml
+
+  lint:
+    name: import + syntax sanity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Smoke-import every module
+        run: |
+          python -c "import pipeline.config_loader, pipeline.merge_ffmpeg, pipeline.organize_folders, pipeline.rename_mp4, pipeline.MoveFiles, pipeline.status_file"
+          python -c "import watcher.folder_watcher, watcher.pipeline_runner, watcher.status, watcher.storage_watcher"
+          python -c "import web.app, web.services, web.auth"
+          python -c "import youtube.metadata_builder, youtube.oauth_setup, youtube.upload_status, youtube.youtube_uploader"
+          python -c "import db, db.control, db.runs, db.schema, db.tournaments"
+          python -c "import archive, archive.archiver"
+      - name: Validate docker-compose.yml
+        # The compose file uses ${VAR:?...} for secrets so production
+        # cannot start with placeholder values. CI just needs dummy
+        # values to pass config validation.
+        env:
+          WEB_PASSWORD: ci-placeholder
+          WEB_SECRET_KEY: ci-placeholder
+        run: docker compose -f docker-compose.yml config -q
+      - name: Shellcheck bench_io.sh
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck -S warning scripts/bench_io.sh || true   # warnings only

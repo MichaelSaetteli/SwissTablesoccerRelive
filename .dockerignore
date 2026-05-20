@@ -1,0 +1,48 @@
+# Source-control + dev artefacts not needed in the runtime image.
+.git/
+.gitignore
+.dockerignore
+README.md
+INSTALL.md
+PROJEKT_BRIEFING.md
+CLAUDE.md
+
+# Tests stay on the dev machine.
+tests/
+pytest.ini
+requirements-dev.txt
+
+# Local Python caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments.
+.venv/
+venv/
+env/
+
+# IDE.
+.vscode/
+.idea/
+
+# Operator data + secrets must never end up in the image.
+config/status_*.json
+status_*.json
+*.env
+.env*
+!.env.example
+youtube_token.json
+client_secrets.json
+
+# Build/CI output.
+build/
+dist/
+*.egg-info/
+
+# OS junk.
+.DS_Store
+Thumbs.db

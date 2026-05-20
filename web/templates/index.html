@@ -1,0 +1,355 @@
+{% extends "base.html" %}
+{% block title %}Pipeline-Status{% endblock %}
+{% block body %}
+
+<div id="storage-banner" class="storage-banner" data-status="ok" hidden>
+  <span data-field="storage_message"></span>
+</div>
+
+<section class="tabs">
+  <nav class="tabbar" role="tablist">
+    {% for d in disciplines %}
+      <button class="tab"
+              data-tab="{{ d.name }}"
+              role="tab"
+              {% if not d.available %}disabled title="Diese Disziplin ist nicht konfiguriert"{% endif %}>
+        {{ d.name }}
+        {% if d.available and not d.enabled %}<span class="badge">deaktiviert</span>{% endif %}
+      </button>
+    {% endfor %}
+    <button class="tab" data-tab="Turniere" role="tab">Turniere</button>
+    <button class="tab" data-tab="System"   role="tab">System</button>
+  </nav>
+
+  {% for d in disciplines %}
+    <article class="tabpanel"
+             id="panel-{{ d.name }}"
+             data-discipline="{{ d.name }}"
+             {% if not d.available %}aria-disabled="true"{% endif %}>
+      {% if not d.available %}
+        <p class="empty">Disziplin "{{ d.name }}" ist nicht konfiguriert. Lege eine
+          <code>config_{{ d.name|lower }}.json</code> an, damit dieser Tab
+          aktiv wird.</p>
+      {% else %}
+        <!-- 0. Aktives Turnier -->
+        <section class="card tournament-banner-card">
+          <p class="tournament-banner">
+            Aktives Turnier:
+            <strong data-field="active_tournament_name">(keines)</strong>
+            <span data-field="active_tournament_auto_badge"></span>
+            <a class="link" data-action="goto-tournaments">verwalten →</a>
+          </p>
+        </section>
+
+        <!-- 1. Upload-Status -->
+        <section class="card status-card">
+          <h2>Status</h2>
+          <p class="state">
+            Zustand: <strong data-field="state">--</strong>
+          </p>
+          <p>Erkannte Ordner: <span data-field="folders_detected">--</span></p>
+          <p>Verarbeitet: <span data-field="folders_processed">--</span></p>
+          <p>Gestartet: <span data-field="started_at">--</span></p>
+          <p>Aktualisiert: <span data-field="updated_at">--</span></p>
+          <p class="error" data-field="error" hidden></p>
+        </section>
+
+        <!-- 1b. Verlauf (Run-History fuer diese Disziplin) -->
+        <section class="card history-card">
+          <h2>Verlauf</h2>
+          <p class="hint">
+            Letzte abgeschlossene Pipeline-Runs (Auto-Refresh alle 3 s).
+            Phasen-Timings stammen aus der SQLite-DB
+            <code>runs.db</code>.
+          </p>
+          <p class="stats">
+            <span data-field="history_total">--</span> Runs ·
+            <span data-field="history_throughput">--</span> GB/h Ø ·
+            <span data-field="history_failed">--</span> Fehler
+          </p>
+          <div class="bulk-toolbar" data-bulk-toolbar hidden>
+            <span><strong data-bulk-count>0</strong> ausgewaehlt.</span>
+            Phase:
+            <select data-bulk-phase>
+              <option value="merge">Mergen</option>
+              <option value="rename">Rename + Mergen</option>
+              <option value="output">Output verifizieren</option>
+            </select>
+            <button data-action="bulk-restart">Restart auswaehlen</button>
+            <button data-action="bulk-clear" class="secondary">Auswahl loeschen</button>
+          </div>
+          <table class="history-table" data-field="history_rows">
+            <thead>
+              <tr>
+                <th><input type="checkbox" data-bulk-select-all></th>
+                <th>Ordner</th><th>Status</th><th>Prio</th><th>In</th><th>Out</th>
+                <th>Merge</th><th>Move</th><th>Org</th><th>Rename</th>
+                <th>Aktion</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <!-- 2. Pipeline-Steuerung -->
+        <section class="card control-card">
+          <h2>Steuerung</h2>
+          <p class="hint">
+            Manueller Start ist ein Fallback - normalerweise erkennt der
+            Folder-Watcher den Upload automatisch.
+          </p>
+          <p class="pipeline-status">
+            Pipeline-Zustand:
+            <strong data-field="pipeline_paused_label">aktiv</strong>
+          </p>
+          <button data-action="run" {% if not d.enabled %}disabled{% endif %}>
+            Pipeline starten
+          </button>
+          <button data-action="pipeline-pause" class="secondary">
+            Pipeline pausieren
+          </button>
+          <button data-action="pipeline-resume" class="secondary" hidden>
+            Pipeline fortsetzen
+          </button>
+          <h3>Log</h3>
+          <pre class="log" data-field="log_tail"></pre>
+        </section>
+
+        <!-- 3a. Datei-Benennung (Filename-Konstanten) -->
+        <section class="card filename-card">
+          <h2>Datei-Benennung</h2>
+          <p class="hint">
+            Schema:
+            <code>{jahr} {sts_nummer} {tischnummer} {turniername} {disziplin} [{part}].mp4</code><br>
+            <em>Tischnummer</em> kommt aus dem Ordnernamen (ET01 -> T01).
+            <em>Part</em> ist optional - bei Splits (>24 MP4s) wird er
+            automatisch durch "Part 1", "Part 2", ... ersetzt.
+          </p>
+          <form data-form="filename">
+            <label>Jahr
+              <input type="text" name="jahr" placeholder="2026">
+            </label>
+            <label>STS-Nummer
+              <input type="text" name="sts_nummer" placeholder="STS2">
+            </label>
+            <label>Turniername
+              <input type="text" name="turniername" placeholder="Seetal">
+            </label>
+            <label>Disziplin
+              <input type="text" name="disziplin" placeholder="Doppel">
+            </label>
+            <label>Part (optional)
+              <input type="text" name="part" placeholder="z.B. Part 1 - leer lassen wenn nicht gebraucht">
+            </label>
+            <p class="preview-line">
+              Vorschau: <code data-field="filename_preview">--</code>
+            </p>
+            <button type="submit">Speichern</button>
+            <span class="save-status" data-form-status hidden></span>
+          </form>
+        </section>
+
+        <!-- 3b. YouTube-Konfiguration -->
+        <section class="card youtube-card">
+          <h2>YouTube-Konfiguration</h2>
+          <p class="hint">
+            Wird in Schritt 4 (Upload) verwendet. Aenderungen werden sofort
+            gespeichert.
+          </p>
+          <form data-form="youtube">
+            <label>Turniername
+              <input type="text" name="tournament_name">
+            </label>
+            <label>Datum
+              <input type="text" name="date" placeholder="17./18. Mai 2026">
+            </label>
+            <label>Ort
+              <input type="text" name="location" placeholder="Bern, Schweiz">
+            </label>
+            <label>Titel-Template
+              <input type="text" name="title_template"
+                     placeholder="{turniername} {disziplin} {kamera} Part {nummer}">
+            </label>
+            <label>Beschreibungs-Template
+              <textarea name="description_template" rows="3"></textarea>
+            </label>
+            <fieldset>
+              <legend>Playlist</legend>
+              <label class="inline">
+                <input type="radio" name="playlist_mode" value="new" checked>
+                Neu anlegen
+              </label>
+              <input type="text" name="playlist_new_title" placeholder="Playlist-Titel">
+              <label class="inline">
+                <input type="radio" name="playlist_mode" value="existing">
+                Bestehende ID
+              </label>
+              <input type="text" name="playlist_id" placeholder="YouTube Playlist-ID">
+            </fieldset>
+            <button type="submit">Speichern</button>
+            <span class="save-status" data-form-status hidden></span>
+          </form>
+        </section>
+
+        <!-- 4. YouTube-Upload -->
+        <section class="card youtube-upload-card">
+          <h2>YouTube-Upload</h2>
+          <p class="hint">
+            Lade die fertigen Videos via YouTube Data API hoch. Die Vorschau
+            unten zeigt die generierten Titel - vor jedem Upload pruefen.
+          </p>
+          <p class="quota-hint" data-field="quota_hint" hidden></p>
+
+          <h3>Upload-Vorschau</h3>
+          <ol class="upload-preview" data-field="upload_preview">
+            <li class="empty">Noch keine Videos vorhanden.</li>
+          </ol>
+          <button data-action="upload-refresh" type="button">
+            Vorschau aktualisieren
+          </button>
+
+          <h3>Upload-Status</h3>
+          <p>Zustand: <strong data-field="upload_state">--</strong></p>
+          <p>Fortschritt: <span data-field="upload_progress">--</span></p>
+          <p>Aktuelle Datei: <span data-field="upload_current">--</span></p>
+          <progress data-field="upload_bar" max="100" value="0"
+                    style="width: 100%;"></progress>
+          <p class="error" data-field="upload_error" hidden></p>
+          <pre class="log" data-field="upload_log"></pre>
+
+          <button data-action="upload" {% if not d.enabled %}disabled{% endif %}>
+            Upload starten
+          </button>
+        </section>
+
+        <!-- 5. Download -->
+        <section class="card download-card">
+          <h2>Download</h2>
+          <ul class="files" data-field="files">
+            <li class="empty">Noch keine Videos vorhanden.</li>
+          </ul>
+          <a class="btn-zip"
+             href="{{ url_for('download.download_all_zip', discipline=d.name) }}">
+            Alle als ZIP herunterladen
+          </a>
+        </section>
+      {% endif %}
+    </article>
+  {% endfor %}
+
+  <!-- ===== Top-level tab: Turniere ===== -->
+  <article class="tabpanel" id="panel-Turniere" data-discipline="Turniere">
+    <section class="card">
+      <h2>Neues Turnier anlegen</h2>
+      <p class="hint">
+        Wird beim naechsten Pipeline-Run als "Aktives Turnier" verwendet
+        (Auto-Activation). Auto-erstellte Turniere kannst du in der
+        Liste unten umbenennen / ergaenzen.
+      </p>
+      <form data-form="tournament-create">
+        <label>Turniername (*)<input type="text" name="name" required></label>
+        <label>Datum<input type="text" name="date" placeholder="2026-05-17"></label>
+        <label>Ort<input type="text" name="location" placeholder="Bern, Festhalle"></label>
+        <label>Veranstalter<input type="text" name="organizer" placeholder="TFCSG"></label>
+        <label>YouTube-Kanal<input type="text" name="youtube_channel" placeholder="Swisstablesoccer"></label>
+        <label>Video-Prefix<input type="text" name="video_prefix" placeholder="STR_2026_Bern_"></label>
+        <label>Beschreibungsvorlage<textarea name="description_template" rows="3"></textarea></label>
+        <label>Tags<input type="text" name="tags" placeholder="tischfussball, schweiz, 2026"></label>
+        <label>Max. Workers<input type="number" name="max_workers" value="4" min="1" max="16"></label>
+        <button type="submit">Turnier erstellen</button>
+        <span data-form-status hidden></span>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Alle Turniere</h2>
+      <p class="hint">
+        Pro Disziplin ist immer maximal eines aktiv (Auto-Create wenn keines).
+      </p>
+      <table class="tournaments-table" data-field="tournaments_rows">
+        <thead>
+          <tr>
+            <th>Name</th><th>Datum</th><th>Ort</th><th>Aktiv fuer</th>
+            <th>Aktionen</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </article>
+
+  <!-- ===== Top-level tab: System ===== -->
+  <article class="tabpanel" id="panel-System" data-discipline="System">
+    <section class="card storage-card">
+      <h2>Speicherplatz</h2>
+      <p class="hint">
+        Live-Snapshot aller von der Pipeline genutzten Volumes
+        (Auto-Refresh alle 10 s). Schwellen:
+        <strong>warn ≤ 500 GB</strong>, <strong>kritisch ≤ 200 GB</strong>.
+      </p>
+      <ul class="volumes-list" data-field="volumes_list">
+        <li class="empty">Wird geladen ...</li>
+      </ul>
+    </section>
+
+    <section class="card archive-card">
+      <h2>Archivierung</h2>
+      <p class="hint">
+        Nach erfolgreichem YouTube-Upload kannst du ein Turnier auf die
+        HDD archivieren. Der Flow ist <strong>manuell mit Bestaetigung</strong>:
+        kein Auto-Trigger, SHA-256-Verifikation auf jeder Datei, SSD-
+        Original wird erst nach erfolgreicher Verifikation geloescht.
+      </p>
+
+      <h3>Plan erstellen</h3>
+      <form data-form="archive-plan">
+        <label>Disziplin
+          <select name="discipline">
+            <option value="Doppel">Doppel</option>
+            <option value="Einzel">Einzel</option>
+          </select>
+        </label>
+        <label>Turnier-ID
+          <input type="number" name="tournament_id" placeholder="1" required>
+        </label>
+        <label>Archiv-Ziel
+          <input type="text" name="archive_root"
+                 value="/volume2/HDD12TB/archiv"
+                 placeholder="/volume2/HDD12TB/archiv">
+        </label>
+        <button type="submit">Plan vorbereiten</button>
+      </form>
+      <div class="archive-plan-preview" data-field="archive_plan_preview" hidden>
+        <p>
+          <strong data-field="archive_plan_files">--</strong> Dateien,
+          <strong data-field="archive_plan_gb">--</strong> GB
+          → <code data-field="archive_plan_target">--</code>
+        </p>
+        <label class="inline">
+          <input type="checkbox" data-field="archive_delete_source" checked>
+          SSD-Originale nach erfolgreicher Verifikation loeschen
+        </label>
+        <br>
+        <button data-action="archive-execute">
+          Archivierung starten (mit SHA-256-Verifikation)
+        </button>
+      </div>
+
+      <h3>Archiv-Verlauf</h3>
+      <table class="archives-table" data-field="archives_rows">
+        <thead>
+          <tr>
+            <th>Turnier</th><th>Pfad</th><th>Status</th>
+            <th>Verifiziert</th><th>Bytes</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </article>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}
