@@ -21,8 +21,7 @@ hochladen kann.
   - SSH/SCP-Client (für den Token-Transfer aufs NAS)
 * Repo lokal geklont:
   ```bash
-  git clone -b claude/read-briefing-start-build-2wOz7 \
-    https://github.com/MichaelSaetteli/SwissTablesoccerRelive.git
+  git clone https://github.com/MichaelSaetteli/SwissTablesoccerRelive.git
   cd SwissTablesoccerRelive
   python3 -m venv .venv && source .venv/bin/activate
   pip install -r requirements.txt
