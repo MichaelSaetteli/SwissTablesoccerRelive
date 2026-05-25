@@ -99,3 +99,18 @@ Siehe Abschnitt 8 in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 Kurz: Pipeline + Watcher + Web + YouTube-Modul sind implementiert
 (13 Commits ahead of `main`). Offen: Dashboard mit Performance-Metriken
 und Archivierungs-Flow (Auftrag 4 + 5 im Operator-Briefing).
+
+## Claude Code Instanzen
+
+Beide Claude Code Instanzen sind eingerichtet und einsatzbereit:
+
+| Instanz | Start | Arbeitsverzeichnis |
+|---|---|---|
+| **Laptop** | Terminal → `cc` → `1` | `C:\Users\saett\SwissTablesoccerReLive` |
+| **NAS** | `ssh saetteli@192.168.1.159` → `cc` → `1` | `/volume1/SDD/projects/SwissTablesoccerRelive` |
+
+### Aufgabenverteilung
+- **NAS-Instanz** → Docker, Logs, Live-System, Pipeline-Dateien, `.env`-Konfiguration
+- **Laptop-Instanz** → Git-Operationen, Windows-Skripte, lokale Entwicklung, SSH-Befehle zur NAS
+
+Beide Instanzen teilen dasselbe GitHub-Repo — Änderungen via `git pull`/`git push` synchronisieren.
