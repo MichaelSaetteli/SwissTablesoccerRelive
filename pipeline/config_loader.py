@@ -116,6 +116,10 @@ class PipelineConfig:
 # Loader
 # ---------------------------------------------------------------------------
 
+HOT_PATH_KEYS = ("eingang", "work", "output")
+FORBIDDEN_HOT_PATH_PREFIXES = ("/volume2/", "/volume3/")
+
+
 def _validate(data: Dict[str, Any], source: Path) -> None:
     missing = [key for key in REQUIRED_TOP_LEVEL if key not in data]
     if missing:
@@ -138,6 +142,32 @@ def _validate(data: Dict[str, Any], source: Path) -> None:
     if missing_consts:
         raise ConfigError(
             f"{source}: missing filename_constants {missing_consts}"
+        )
+
+    _validate_volume_layout(data["paths"], source)
+
+
+def _validate_volume_layout(paths: Dict[str, str], source: Path) -> None:
+    # Enforces INV-1 (see docs/INVARIANTS.md): the hot path lives on SSD.
+    # If you are tempted to relax this because a runtime config "happens to
+    # work" with HDD paths, you are wrong — see the past-mistakes section
+    # of INVARIANTS.md. Logs may live on HDD.
+    violations = []
+    for key in HOT_PATH_KEYS:
+        raw = str(paths.get(key, ""))
+        for forbidden in FORBIDDEN_HOT_PATH_PREFIXES:
+            if raw.startswith(forbidden):
+                violations.append((key, raw, forbidden))
+                break
+    if violations:
+        details = "; ".join(
+            f"paths.{key}={value!r} starts with HDD prefix {prefix!r}"
+            for key, value, prefix in violations
+        )
+        raise ConfigError(
+            f"{source}: volume-layout invariant violated (INV-1). "
+            f"{details}. eingang/work/output must live on the SSD "
+            f"(/volume1/SDD/...). See docs/INVARIANTS.md."
         )
 
 

@@ -16,10 +16,14 @@ Datenpunkt fuer den B2-Estimator (Merge-Dauer).
 
 ## Kontext (was schon erledigt ist)
 
-* 15 `.MP4`-Dateien (Panasonic V777, MP4-Modus, je ~2 GB, je 30 min) wurden
-  vom Operator via DSM File Station flach in `/volume1/SDD/eingang_einzel/ET20/`
-  abgelegt. **Kein DCIM-Unterordner** — Operator hat manuell flachgezogen
-  (Luecke A, dokumentiert in `docs/DECISIONS.md`).
+* 14 `.MP4`-Dateien (Panasonic V777, MP4-Modus, je ~120 MB, je ~2 min;
+  Test-Clips, nicht Produktiv-Material) wurden vom Operator via DSM File
+  Station flach in `/volume1/SDD/eingang_einzel/ET20/` abgelegt. **Kein
+  DCIM-Unterordner** — Operator hat manuell flachgezogen (Luecke A,
+  dokumentiert in `docs/DECISIONS.md`).
+* Gesamtinhalt: ~28 Minuten Video, ~1.8 GB. Merge wird sehr kurz
+  (Sekunden), der B2-Estimator bekommt nur einen kleinen Datenpunkt
+  (nicht repraesentativ fuer echte Turniere mit 30-Min-Clips).
 * Container `video-pipeline` laeuft auf Branch `claude/wizardly-goodall-df2er`
   (deployed-Stand). Branch hat **noch keinen Luecke-B-Fix** — das ist OK,
   dieser Test betrifft die Pipeline (Move/Organize/Rename/Merge), nicht
@@ -33,13 +37,19 @@ Datenpunkt fuer den B2-Estimator (Merge-Dauer).
 ```bash
 ls -la /volume1/SDD/eingang_einzel/ET20/
 du -sh /volume1/SDD/eingang_einzel/ET20/
-sudo grep -E '(quiet|eingang|work|output)' /volume1/SDD/video-pipeline-config/config_einzel.json
-sudo docker ps --filter "name=video-pipeline" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+grep -E '(quiet|eingang|work|output)' /volume1/SDD/video-pipeline-config/config_einzel.json
+docker ps --filter "name=video-pipeline" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ```
 
 Erwartet:
-* 15 `.MP4`-Dateien, ~30 GB total
-* `quiet_seconds` aus der Config notieren (typisch 10)
+* 14 `.MP4`-Dateien, ~1.8 GB total
+* `quiet_seconds` aus der Config (Default 10 wenn nicht gesetzt)
+* Config-Pfade: alle drei (`eingang`, `work`, `output`) muessen auf
+  `/volume1/SDD/...` zeigen. Falls eine auf `/volume2/...` oder
+  `/volume3/...` zeigt → **INV-1-Verletzung** (siehe
+  `docs/INVARIANTS.md`), Container wird die Config nach dem Restart
+  ablehnen. Pfad in der Runtime-Config korrigieren, bevor der Test
+  weitergeht.
 * Container "Up X minutes" mit Port-Mapping `8080->5000`
 
 **Wenn etwas nicht stimmt** (z.B. weniger Dateien, Container down):
@@ -83,8 +93,8 @@ ffprobe -v error -show_entries format=duration,size,bit_rate \
 Erwartet:
 * Eine `.mp4`-Datei nach Schema `2026 STS2 T20 <Turniername> Einzel.mp4`
   (Turniername kommt aus `filename_constants.turniername` in der Config —
-  ggf. `T` als Default)
-* `duration` ~ 15 × 30 min = ca. **27000 s** (450 min)
+  laut Repo-Template z.B. `Seetal`)
+* `duration` ~ 14 × 2 min = ca. **1680 s** (28 min)
 * `codec_name=h264`, `codec_type=video` und ein zweites Stream `aac`/`audio`
 * Keine Drops oder Warnings von `ffprobe`
 

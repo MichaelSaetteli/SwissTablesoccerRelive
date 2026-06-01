@@ -1,5 +1,18 @@
 # CLAUDE.md — SwissTablesoccerRelive
 
+## ⚠️ VOR JEDER ARCHITEKTUR- ODER KONFIGURATIONS-ENTSCHEIDUNG: [`docs/INVARIANTS.md`](docs/INVARIANTS.md) lesen.
+
+Invarianten stehen **nicht zur Diskussion**. Wenn dir eine Invariante
+„komisch" vorkommt, ist die Antwort: trotzdem einhalten, dann nachfragen.
+Nicht: erst handeln, dann rationalisieren. Wenn der laufende Code einer
+Invariante widerspricht, ist der Code der Fehler — nicht die Invariante.
+
+**Häufigste Falle (mehrfach passiert):** Volume-Layout. SSD = `eingang/work/output`,
+HDD = nur Archiv. Wenn eine Runtime-Config HDD-Pfade für `eingang` oder
+`output` zeigt, ist die Config der Bug. Siehe INV-1.
+
+---
+
 ## Projektübersicht
 
 Swiss Tischfussball Relive-Plattform: halbautomatische Pipeline für

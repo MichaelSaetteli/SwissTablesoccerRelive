@@ -1,5 +1,12 @@
 # Entscheidungs-Log — SwissTablesoccerRelive
 
+**Vor jeder neuen Entscheidung: [`INVARIANTS.md`](INVARIANTS.md) lesen.**
+Was dort steht, ist gesetzt. Hier in DECISIONS sind die *veraenderbaren*
+Entscheidungen — neue Eintraege duerfen Invarianten nicht aufweichen,
+nur explizit aufheben (mit Operator-OK + Begruendung).
+
+---
+
 Dieses Dokument haelt wichtige Entscheidungen, Erkenntnisse und Operator-
 Inputs fest, die den Code und die Architektur beeinflussen. Format: kurz,
 chronologisch absteigend (neueste zuerst), eine Entscheidung pro Eintrag.

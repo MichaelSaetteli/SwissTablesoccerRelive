@@ -71,6 +71,61 @@ def test_load_config_invalid_discipline(tmp_path: Path,
         load_config(path)
 
 
+def test_load_config_rejects_eingang_on_hdd_volume2(
+    tmp_path: Path, doppel_config_dict: dict,
+) -> None:
+    doppel_config_dict["paths"]["eingang"] = "/volume2/HDD12TB/eingang_doppel"
+    path = tmp_path / "broken.json"
+    path.write_text(json.dumps(doppel_config_dict), encoding="utf-8")
+    with pytest.raises(ConfigError, match="INV-1"):
+        load_config(path)
+
+
+def test_load_config_rejects_output_on_hdd_volume3(
+    tmp_path: Path, doppel_config_dict: dict,
+) -> None:
+    doppel_config_dict["paths"]["output"] = "/volume3/HDD11TB/output_doppel"
+    path = tmp_path / "broken.json"
+    path.write_text(json.dumps(doppel_config_dict), encoding="utf-8")
+    with pytest.raises(ConfigError, match="INV-1"):
+        load_config(path)
+
+
+def test_load_config_rejects_work_on_hdd_volume2(
+    tmp_path: Path, doppel_config_dict: dict,
+) -> None:
+    doppel_config_dict["paths"]["work"] = "/volume2/HDD12TB/work_doppel"
+    path = tmp_path / "broken.json"
+    path.write_text(json.dumps(doppel_config_dict), encoding="utf-8")
+    with pytest.raises(ConfigError, match="INV-1"):
+        load_config(path)
+
+
+def test_load_config_allows_logs_on_hdd(
+    tmp_path: Path, doppel_config_dict: dict,
+) -> None:
+    # logs may live on HDD (INV-1 explicitly carves them out)
+    doppel_config_dict["paths"]["logs"] = "/volume3/HDD11TB/pipeline_logs"
+    path = tmp_path / "ok.json"
+    path.write_text(json.dumps(doppel_config_dict), encoding="utf-8")
+    cfg = load_config(path)
+    assert str(cfg.paths.logs) == "/volume3/HDD11TB/pipeline_logs"
+
+
+def test_load_config_reports_all_hot_path_violations(
+    tmp_path: Path, doppel_config_dict: dict,
+) -> None:
+    doppel_config_dict["paths"]["eingang"] = "/volume2/HDD12TB/eingang"
+    doppel_config_dict["paths"]["output"] = "/volume3/HDD11TB/output"
+    path = tmp_path / "broken.json"
+    path.write_text(json.dumps(doppel_config_dict), encoding="utf-8")
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(path)
+    msg = str(exc_info.value)
+    assert "paths.eingang" in msg
+    assert "paths.output" in msg
+
+
 def test_ensure_pipeline_dirs_creates_all(doppel_config_path: Path) -> None:
     cfg = load_config(doppel_config_path)
     for directory in cfg.paths.all():
