@@ -56,13 +56,21 @@ def _manager(env, **kw) -> UploadManager:
     return UploadManager(env["engine"], max_parallel=1, **kw)
 
 
+def _active(tid: int) -> dict:
+    """active_tournaments map for the label-based scanner (both disciplines)."""
+    return {
+        "Einzel": {"id": tid, "name": "Seetal 2026"},
+        "Doppel": {"id": tid, "name": "Seetal 2026"},
+    }
+
+
 def test_scan_upload_snapshot_and_release(env, tmp_path: Path) -> None:
+    # Card dirs named E01/E02/E03 -> POSIX volume reader -> tables ET01..ET03.
     for i in (1, 2, 3):
-        make_card(tmp_path / f"card{i}", tournament_id=env["tid"],
-                  table=f"ET0{i}", card_uuid=f"u{i}")
+        make_card(tmp_path / f"E0{i}", tournament_id=env["tid"])
     inv = scan_mounts(
-        [tmp_path / f"card{i}" for i in (1, 2, 3)],
-        active_tournament_id=env["tid"],
+        [tmp_path / f"E0{i}" for i in (1, 2, 3)],
+        discipline="Einzel", active_tournaments=_active(env["tid"]),
     )
     mgr = _manager(env, expected={"Einzel": 3})
     mgr.add_scanned(inv)
@@ -86,8 +94,9 @@ def test_scan_upload_snapshot_and_release(env, tmp_path: Path) -> None:
 
 
 def test_auto_release_via_manager(env, tmp_path: Path) -> None:
-    make_card(tmp_path / "card", tournament_id=env["tid"], card_uuid="solo")
-    inv = scan_mounts([tmp_path / "card"], active_tournament_id=env["tid"])
+    make_card(tmp_path / "E01", tournament_id=env["tid"])
+    inv = scan_mounts([tmp_path / "E01"], discipline="Einzel",
+                      active_tournaments=_active(env["tid"]))
     mgr = _manager(env, expected={"Einzel": 1})
     mgr.add_scanned(inv)
     mgr.start_all(auto_release=True)
@@ -98,14 +107,17 @@ def test_auto_release_via_manager(env, tmp_path: Path) -> None:
 
 
 def test_add_scanned_is_additive(env, tmp_path: Path) -> None:
-    make_card(tmp_path / "a", tournament_id=env["tid"], table="ET01", card_uuid="a")
-    make_card(tmp_path / "b", tournament_id=env["tid"], table="ET02", card_uuid="b")
+    make_card(tmp_path / "E01", tournament_id=env["tid"])
+    make_card(tmp_path / "E02", tournament_id=env["tid"])
     mgr = _manager(env)
-    mgr.add_scanned(scan_mounts([tmp_path / "a"], active_tournament_id=env["tid"]))
+    at = _active(env["tid"])
+    mgr.add_scanned(scan_mounts([tmp_path / "E01"], discipline="Einzel",
+                                active_tournaments=at))
     mgr.start_all(auto_release=False)
     mgr.shutdown(wait=True)
     # Second scan adds b without disturbing a's verified state.
-    mgr.add_scanned(scan_mounts([tmp_path / "b"], active_tournament_id=env["tid"]))
+    mgr.add_scanned(scan_mounts([tmp_path / "E02"], discipline="Einzel",
+                                active_tournaments=at))
     snap = mgr.snapshot()
     states = {r.table: r.state for r in snap.rows}
     assert states["ET01"] == CLIENT_VERIFIED
@@ -113,11 +125,10 @@ def test_add_scanned_is_additive(env, tmp_path: Path) -> None:
 
 
 def test_locked_card_shown_but_not_uploaded(env, tmp_path: Path) -> None:
-    make_card(tmp_path / "ok", tournament_id=env["tid"], card_uuid="ok")
-    make_card(tmp_path / "wrong", tournament_id=999, table="ET09",
-              card_uuid="wrong")  # different tournament -> locked
-    inv = scan_mounts([tmp_path / "ok", tmp_path / "wrong"],
-                      active_tournament_id=env["tid"])
+    make_card(tmp_path / "E01", tournament_id=env["tid"])           # ok
+    make_card(tmp_path / "NONAME", tournament_id=env["tid"])        # no table -> locked
+    inv = scan_mounts([tmp_path / "E01", tmp_path / "NONAME"],
+                      discipline="Einzel", active_tournaments=_active(env["tid"]))
     mgr = _manager(env, expected={"Einzel": 1})
     mgr.add_scanned(inv)
     mgr.start_all(auto_release=False)

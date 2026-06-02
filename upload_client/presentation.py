@@ -19,6 +19,8 @@ from typing import Iterable, List, Optional
 from upload_client.card_scanner import (
     CARD_EMPTY,
     CARD_NO_MARKER,
+    CARD_NO_TABLE,
+    CARD_NO_TOURNAMENT,
     CARD_READY,
     CARD_WRONG_TOURNAMENT,
     ScannedCard,
@@ -51,10 +53,23 @@ DO_NOT_REMOVE = "⛔ Nicht entfernen - Upload laeuft"
 
 # Cards in these client states cannot be uploaded; show them locked.
 _LOCKED_SCAN_REASONS = {
+    CARD_NO_TABLE: "Datentraegername ohne Tischnummer (z.B. E01).",
+    CARD_NO_TOURNAMENT: "Kein aktives Turnier fuer diese Disziplin.",
+    CARD_EMPTY: "Keine Videodateien in der Auswahl.",
     CARD_NO_MARKER: "Karte ohne Marker - vom Admin nicht beschriftet.",
     CARD_WRONG_TOURNAMENT: "Karte gehoert zu einem anderen Turnier.",
-    CARD_EMPTY: "Keine hochladbaren Dateien auf der Karte.",
 }
+
+
+def _dcim_date_range(card: ScannedCard) -> str:
+    """Human date span of a card's DCIM folders, e.g. '22.05.2026'."""
+    if not card.dcim_folders:
+        return ""
+    dates = sorted(f.created for f in card.dcim_folders)
+    first, last = dates[0], dates[-1]
+    if first.date() == last.date():
+        return first.strftime("%d.%m.%Y")
+    return f"{first.strftime('%d.%m.%Y')} - {last.strftime('%d.%m.%Y')}"
 
 
 def badge(state: str) -> str:
@@ -114,6 +129,8 @@ class CardRow:
     release_tooltip: str
     is_error: bool
     error_detail: Optional[str] = None
+    stale_alarm: bool = False        # DCIM folders >3 days apart
+    date_range: str = ""             # human date span of the DCIM folders
 
 
 def row_for_progress(p: CardProgress) -> CardRow:
@@ -173,6 +190,8 @@ def row_for_scanned(c: ScannedCard) -> CardRow:
         release_tooltip="Karte muss erst hochgeladen und verifiziert werden.",
         is_error=is_error,
         error_detail=c.reason if is_error else None,
+        stale_alarm=c.stale_alarm,
+        date_range=_dcim_date_range(c),
     )
 
 

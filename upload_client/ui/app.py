@@ -3,19 +3,24 @@
 Ties the GUI to the core. Upload work runs in the manager's thread pool;
 the window only polls. Mount discovery is the heuristic ``discover_card_roots``
 for now (event-based auto-detect is a later block).
+
+Ingest model (2026-06-02): the table comes from the card's volume name,
+the discipline from the operator's batch choice (held in ``IngestState``,
+overridable per card), and the tournament from the server's active
+tournament per discipline. No pre-written marker is required.
 """
 
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional, Set
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from upload_client.api_client import ApiError
-from upload_client.card_scanner import scan_card
-from upload_client.marker import MarkerError, has_marker, read_marker
+from upload_client.card_scanner import scan_mounts
 from upload_client.mount_watcher import MountWatcher
 from upload_client.mounts import discover_card_roots
 from upload_client.state_store import StateStore
@@ -27,38 +32,56 @@ from upload_client.upload_manager import UploadManager
 STATE_FILE = Path.home() / ".sts_upload" / "state.json"
 
 
-def _expected_and_name(active: dict) -> tuple[Dict[str, int], Dict[str, int], str]:
-    """Return (expected-per-discipline, active-id-per-discipline, name)."""
+@dataclass
+class IngestState:
+    """Mutable operator choices that drive a scan.
+
+    The window updates these (batch discipline selector, per-card override,
+    DCIM sub-folder selection); the scan closure reads them. Overrides are
+    keyed by the card's stable id so they survive re-scans and slot changes.
+    """
+
+    discipline: Optional[str] = None
+    discipline_overrides: Dict[str, str] = field(default_factory=dict)
+    subdir_overrides: Dict[str, Set[str]] = field(default_factory=dict)
+
+
+def _expected_and_name(active: dict) -> tuple[Dict[str, int], str]:
+    """Return (expected-cards-per-discipline, tournament name)."""
     disciplines = active.get("disciplines", {})
     expected: Dict[str, int] = {}
-    active_ids: Dict[str, int] = {}
     name = ""
     for disc in ("Einzel", "Doppel"):
         info = disciplines.get(disc)
         if not info:
             continue
-        active_ids[disc] = int(info.get("id", 0))
-        key = f"expected_cards_{disc.lower()}"
-        expected[disc] = int(info.get(key, 0))
+        expected[disc] = int(info.get(f"expected_cards_{disc.lower()}", 0))
         name = name or info.get("name", "")
-    return expected, active_ids, name
+    return expected, name
 
 
-def _make_scan_fn(active_ids: Dict[str, int]):
-    """Scan discovered roots, locking cards from a non-active tournament."""
+def _active_tournaments(active: dict) -> Dict[str, dict]:
+    """{discipline: {"id", "name"}} for disciplines with an active tournament."""
+    disciplines = active.get("disciplines", {})
+    out: Dict[str, dict] = {}
+    for disc in ("Einzel", "Doppel"):
+        info = disciplines.get(disc)
+        if info and info.get("id"):
+            out[disc] = {"id": int(info["id"]), "name": info.get("name", "")}
+    return out
+
+
+def _make_scan_fn(active_tournaments: Dict[str, dict], state: IngestState):
+    """Scan discovered roots with the operator's current ingest choices."""
 
     def scan() -> Dict[str, object]:
-        inventory: Dict[str, object] = {}
-        for root in discover_card_roots():
-            active_id = None
-            if has_marker(root):
-                try:
-                    active_id = active_ids.get(read_marker(root).discipline)
-                except MarkerError:
-                    active_id = None
-            card = scan_card(root, active_tournament_id=active_id)
-            inventory[card.key] = card
-        return inventory
+        return scan_mounts(
+            discover_card_roots(),
+            discipline=state.discipline,
+            active_tournaments=active_tournaments,
+            discipline_overrides=state.discipline_overrides,
+            subdir_overrides=state.subdir_overrides,
+        )
 
     return scan
 
@@ -77,17 +100,22 @@ def run(argv=None) -> int:
         QMessageBox.critical(None, "Fehler", f"Aktives Turnier laden: {exc}")
         return 1
 
-    expected, active_ids, name = _expected_and_name(active)
+    expected, name = _expected_and_name(active)
+    active_tournaments = _active_tournaments(active)
+    state = IngestState(discipline=next(iter(active_tournaments), None))
+
     engine = UploadEngine(api, StateStore(STATE_FILE))
     manager = UploadManager(engine, max_parallel=4, expected=expected)
     resume_hint = len(engine.resumable())
 
     window = MainWindow(
         manager,
-        scan_fn=_make_scan_fn(active_ids),
+        scan_fn=_make_scan_fn(active_tournaments, state),
         watcher=MountWatcher(),
         tournament_name=name,
         resume_hint=resume_hint,
+        ingest_state=state,
+        disciplines=list(active_tournaments.keys()),
     )
     window.resize(900, 600)
     window.show()

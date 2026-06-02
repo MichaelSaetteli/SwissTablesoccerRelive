@@ -19,6 +19,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -34,11 +35,14 @@ from PySide6.QtWidgets import (
 from upload_client.upload_engine import CLIENT_INTERRUPTED, CLIENT_VERIFIED
 
 # columns
-_COL_SEL, _COL_TABLE, _COL_DISC, _COL_STATE, _COL_DETAIL, _COL_REMOVE = range(6)
-_HEADERS = ["", "Tisch", "Disziplin", "Status", "Fortschritt", "Entfernen"]
+(_COL_SEL, _COL_TABLE, _COL_DISC, _COL_STATE, _COL_DETAIL, _COL_DATE,
+ _COL_REMOVE) = range(7)
+_HEADERS = ["", "Tisch", "Disziplin", "Status", "Fortschritt", "Datum",
+            "Entfernen"]
 
 _ERROR_BG = QColor(0xFD, 0xE7, 0xE9)
 _DONE_BG = QColor(0xE6, 0xF4, 0xEA)
+_WARN_BG = QColor(0xFF, 0xF4, 0xCE)   # amber: DCIM date-spread alarm
 _POLL_MS = 1500
 
 
@@ -52,12 +56,16 @@ class MainWindow(QMainWindow):
         tournament_name: str = "",
         resume_hint: int = 0,
         poll_ms: int = _POLL_MS,
+        ingest_state=None,
+        disciplines: Optional[List[str]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._manager = manager
         self._scan_fn = scan_fn
         self._watcher = watcher
+        self._ingest_state = ingest_state
+        self._disciplines = disciplines or []
         self._row_of: Dict[str, int] = {}  # card key -> table row index
 
         title = "STS-Upload"
@@ -85,6 +93,22 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
 
         bar = QHBoxLayout()
+
+        # Batch discipline selector: the operator declares which discipline
+        # the inserted cards belong to (defeats Einzel/Doppel mix-ups). A
+        # change re-scans so every card re-maps to the chosen discipline.
+        self.cmb_discipline = QComboBox()
+        for disc in self._disciplines:
+            self.cmb_discipline.addItem(disc)
+        if self._ingest_state is not None and self._ingest_state.discipline:
+            i = self.cmb_discipline.findText(self._ingest_state.discipline)
+            if i >= 0:
+                self.cmb_discipline.setCurrentIndex(i)
+        self.cmb_discipline.currentTextChanged.connect(self.on_discipline_changed)
+        if self._disciplines:
+            bar.addWidget(QLabel("Disziplin:"))
+            bar.addWidget(self.cmb_discipline)
+
         self.btn_scan = QPushButton("SD-Karten einlesen")
         self.btn_start = QPushButton("Hochladen starten")
         self.btn_release_all = QPushButton("Alle verifizierten freigeben")
@@ -144,6 +168,13 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
     # -- actions -----------------------------------------------------------
+
+    def on_discipline_changed(self, text: str) -> None:
+        """Batch discipline changed: update the ingest state and re-scan."""
+        if self._ingest_state is not None:
+            self._ingest_state.discipline = text or None
+        if self._scan_fn is not None:
+            self.on_scan()
 
     def on_scan(self) -> None:
         try:
@@ -236,7 +267,8 @@ class MainWindow(QMainWindow):
             sel.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             sel.setCheckState(Qt.Unchecked)
             self.table.setItem(idx, _COL_SEL, sel)
-            for col in (_COL_TABLE, _COL_DISC, _COL_STATE, _COL_DETAIL, _COL_REMOVE):
+            for col in (_COL_TABLE, _COL_DISC, _COL_STATE, _COL_DETAIL,
+                        _COL_DATE, _COL_REMOVE):
                 self.table.setItem(idx, col, QTableWidgetItem(""))
 
         self.table.item(idx, _COL_TABLE).setText(row.table)
@@ -251,11 +283,26 @@ class MainWindow(QMainWindow):
         if row.error_detail:
             detail_item.setToolTip(row.error_detail)
 
+        date_item = self.table.item(idx, _COL_DATE)
+        date_text = row.date_range
+        if row.stale_alarm:
+            date_item.setToolTip(
+                "Aufnahme-Ordner liegen mehr als 3 Tage auseinander - "
+                "alte Daten? Auswahl pruefen."
+            )
+            date_text = (f"⚠ {date_text}").strip()  # warning sign
+        date_item.setText(date_text)
+
         self.table.item(idx, _COL_REMOVE).setText(row.safe_to_remove)
 
-        bg = _ERROR_BG if row.is_error else (
-            _DONE_BG if row.state == CLIENT_VERIFIED else QColor(Qt.white)
-        )
+        if row.is_error:
+            bg = _ERROR_BG
+        elif row.stale_alarm:
+            bg = _WARN_BG
+        elif row.state == CLIENT_VERIFIED:
+            bg = _DONE_BG
+        else:
+            bg = QColor(Qt.white)
         for col in range(len(_HEADERS)):
             cell = self.table.item(idx, col)
             if cell is not None:

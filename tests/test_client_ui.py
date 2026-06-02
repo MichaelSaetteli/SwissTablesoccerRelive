@@ -142,34 +142,41 @@ def test_release_selected_only_releases_checked_verified(qapp):
 
 
 def test_expected_and_name_parses_active_tournament(qapp):
-    from upload_client.ui.app import _expected_and_name
+    from upload_client.ui.app import _active_tournaments, _expected_and_name
     active = {"disciplines": {
         "Einzel": {"id": 2, "name": "Seetal 2026 Einzel",
                    "expected_cards_einzel": 30, "expected_cards_doppel": 0},
         "Doppel": {"id": 1, "name": "TestSG",
                    "expected_cards_doppel": 24, "expected_cards_einzel": 0},
     }}
-    expected, ids, name = _expected_and_name(active)
+    expected, name = _expected_and_name(active)
     assert expected == {"Einzel": 30, "Doppel": 24}
-    assert ids == {"Einzel": 2, "Doppel": 1}
     assert name == "Seetal 2026 Einzel"
+    assert _active_tournaments(active) == {
+        "Einzel": {"id": 2, "name": "Seetal 2026 Einzel"},
+        "Doppel": {"id": 1, "name": "TestSG"},
+    }
 
 
-def test_make_scan_fn_locks_wrong_tournament(qapp, tmp_path, monkeypatch):
-    from tests.client_helpers import make_card
-    from upload_client.card_scanner import CARD_READY, CARD_WRONG_TOURNAMENT
+def test_make_scan_fn_label_based(qapp, tmp_path, monkeypatch):
+    from upload_client.card_scanner import CARD_READY
     from upload_client.ui import app as appmod
 
-    wrong = make_card(tmp_path / "wrong", tournament_id=99, card_uuid="x",
-                      discipline="Einzel", table="ET05")
-    ok = make_card(tmp_path / "ok", tournament_id=2, card_uuid="y",
-                   discipline="Einzel", table="ET06")
-    monkeypatch.setattr(appmod, "discover_card_roots", lambda: [wrong, ok])
+    # The POSIX volume reader uses the mount-dir name as the volume label,
+    # so a folder named "E05" maps to table ET05 (Einzel hint from 'E').
+    e05 = tmp_path / "E05"
+    (e05 / "DCIM" / "100PANA").mkdir(parents=True)
+    (e05 / "DCIM" / "100PANA" / "a.mp4").write_bytes(b"x" * 10)
+    monkeypatch.setattr(appmod, "discover_card_roots", lambda: [e05])
 
-    inv = appmod._make_scan_fn({"Einzel": 2})()
-    by_table = {c.marker.table: c.status for c in inv.values()}
-    assert by_table["ET05"] == CARD_WRONG_TOURNAMENT
-    assert by_table["ET06"] == CARD_READY
+    state = appmod.IngestState(discipline="Einzel")
+    scan = appmod._make_scan_fn({"Einzel": {"id": 2, "name": "T"}}, state)
+    inv = scan()
+    (card,) = inv.values()
+    assert card.status == CARD_READY
+    assert card.marker.table == "ET05"
+    assert card.marker.discipline == "Einzel"
+    assert card.marker.tournament_id == 2
 
 
 def test_interrupted_card_shows_red_warning(qapp):
@@ -208,3 +215,31 @@ def test_success_banner_when_all_done(qapp):
     # isHidden() reflects the explicit flag even without showing the window.
     assert win.lbl_success.isHidden() is False
     assert "freigegeben" in win.lbl_success.text().lower()
+
+
+def test_discipline_selector_updates_state_and_rescans(qapp):
+    from upload_client.ui.app import IngestState
+    state = IngestState(discipline="Einzel")
+    seen = []
+
+    def scan():
+        seen.append(state.discipline)
+        return {}
+
+    win = MainWindow(StubManager(_snapshot([])), scan_fn=scan,
+                     ingest_state=state, disciplines=["Einzel", "Doppel"],
+                     poll_ms=10_000)
+    win.cmb_discipline.setCurrentText("Doppel")
+    assert state.discipline == "Doppel"
+    assert "Doppel" in seen  # changing the batch discipline triggered a re-scan
+
+
+def test_date_and_alarm_rendered_in_row(qapp):
+    from upload_client.ui.main_window import _COL_DATE
+    row = _row("u1", "ET01", CLIENT_UPLOADING,
+               stale_alarm=True, date_range="22.05.2026")
+    win = MainWindow(StubManager(_snapshot([row])), scan_fn=lambda: {},
+                     poll_ms=10_000)
+    idx = win._row_of["u1"]
+    text = win.table.item(idx, _COL_DATE).text()
+    assert "22.05.2026" in text and "⚠" in text  # warning sign
