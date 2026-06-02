@@ -94,6 +94,27 @@ Die Build-Definition steht in [`upload_client.spec`](../upload_client.spec)
 (single-file, windowed). `dist/` und `build/` sind in `.gitignore` — die
 gebaute Datei wird **nicht** eingecheckt, sondern direkt verteilt.
 
+### Ohne eigenen Windows-Rechner: GitHub Actions
+
+Zwei Wege, die `.exe` ganz ohne lokalen Windows-Build zu bekommen:
+
+* **Artifact pro Build** — die Action **„Build Upload Client (Windows)"**
+  laeuft bei jeder Aenderung am Client und manuell (Actions-Tab →
+  „Run workflow"). Den gruenen Run oeffnen → unten unter **Artifacts** →
+  `STS-Upload-windows` herunterladen → entpacken.
+* **Versionierter Release per Tag** (empfohlen fuer die Verteilung) — einen
+  Tag `upload-client-v<version>` pushen; die Action **„Release Upload Client"**
+  baut die `.exe` und haengt sie an einen automatisch erstellten
+  GitHub-Release:
+
+  ```bash
+  git tag upload-client-v1
+  git push origin upload-client-v1
+  ```
+
+  Danach liegt die `STS-Upload.exe` auf der **Releases**-Seite des Repos —
+  die Operatoren laden sie dort direkt herunter.
+
 ### Verteilen
 
 * `STS-Upload.exe` an die Operatoren geben (USB, Share, Download).
