@@ -489,6 +489,233 @@ def api_youtube_config(discipline: str):
 
 
 # ---------------------------------------------------------------------------
+# Upload-staging routes (Issue #15)
+#
+# Client-tool surface area. Authenticated like every other /api/* endpoint;
+# the desktop tool logs in once and re-uses the session cookie.
+# ---------------------------------------------------------------------------
+
+def _eingang_for(discipline: str) -> Optional[Path]:
+    config = _get_config_or_404(discipline)
+    return None if config is None else config.paths.eingang
+
+
+def _eingang_roots() -> Dict[str, Path]:
+    return {
+        d: cfg.paths.eingang for d, cfg in _configs().items()
+    }
+
+
+def _conn_for_uploads():
+    """Use whichever discipline config we have to find the runs.db.
+
+    Both configs share the same DB; we pick the first one available so
+    upload endpoints stay agnostic of which discipline the client is
+    targeting (the discipline is in the request payload, not the URL).
+    """
+    from db import open_db
+    for cfg in _configs().values():
+        if cfg.source_path is not None:
+            return open_db(cfg.source_path.parent / "runs.db")
+    return None
+
+
+@api_bp.route("/upload/active-tournament", methods=["GET"])
+@login_required
+def api_upload_active_tournament():
+    """Client tool fetches this once at startup to know what's running.
+
+    Returns the active tournament per discipline plus the expected card
+    counts. With these numbers the operator UI can show the
+    completeness check (\"23/30 verified\") before any upload starts.
+    """
+    conn = _conn_for_uploads()
+    if conn is None:
+        return jsonify({"error": "no discipline configured"}), 503
+    from db.tournaments import get_active_tournament
+    out: Dict[str, object] = {"disciplines": {}}
+    for discipline in _configs().keys():
+        t = get_active_tournament(conn, discipline)
+        if t is None:
+            out["disciplines"][discipline] = None
+            continue
+        d = t.to_dict()
+        # Expected card counts live as new tournament columns; the row
+        # returned from to_dict() does not surface them yet, so we read
+        # the raw row here for backwards compatibility.
+        row = conn.execute(
+            "SELECT expected_cards_doppel, expected_cards_einzel "
+            "FROM tournaments WHERE id = ?", (t.id,),
+        ).fetchone()
+        d["expected_cards_doppel"] = int(row["expected_cards_doppel"] or 0)
+        d["expected_cards_einzel"] = int(row["expected_cards_einzel"] or 0)
+        out["disciplines"][discipline] = d
+    return jsonify(out)
+
+
+@api_bp.route("/upload/start", methods=["POST"])
+@login_required
+def api_upload_start():
+    """Reserve a staging dir + DB row for a new SD card.
+
+    Payload (JSON):
+        {
+          "tournament_id": int,
+          "discipline": "Doppel"|"Einzel",
+          "table_name": "ET01",
+          "expected_files": int,
+          "expected_bytes": int,
+          "auto_release": bool (optional, default false),
+          "card_uuid": str (optional, server mints one if absent)
+        }
+    """
+    from upload_staging import service as upload_service
+    payload = request.get_json(silent=True) or {}
+    discipline = payload.get("discipline", "")
+    eingang = _eingang_for(discipline)
+    if eingang is None:
+        return jsonify({"error": "unknown discipline"}), 404
+    conn = _conn_for_uploads()
+    if conn is None:
+        return jsonify({"error": "no DB"}), 503
+
+    try:
+        card = upload_service.start_upload(
+            conn,
+            eingang_root=eingang,
+            tournament_id=int(payload.get("tournament_id", 0)),
+            table_name=str(payload.get("table_name", "")),
+            discipline=discipline,
+            expected_files=int(payload.get("expected_files", 0)),
+            expected_bytes=int(payload.get("expected_bytes", 0)),
+            auto_release=bool(payload.get("auto_release", False)),
+            card_uuid=payload.get("card_uuid"),
+        )
+    except upload_service.UploadServiceError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(card.to_dict()), 201
+
+
+@api_bp.route("/upload/<int:card_id>/chunk", methods=["POST"])
+@login_required
+def api_upload_chunk(card_id: int):
+    """Multipart-form upload of one file under the staging dir.
+
+    Form fields:
+        relative_name: str  (e.g. "video_001.mp4")
+        file:          file (binary)
+    """
+    from upload_staging import service as upload_service
+    relative_name = request.form.get("relative_name", "")
+    if "file" not in request.files:
+        return jsonify({"error": "no 'file' part in multipart"}), 400
+    stream = request.files["file"].stream
+
+    conn = _conn_for_uploads()
+    if conn is None:
+        return jsonify({"error": "no DB"}), 503
+
+    try:
+        card = upload_service.store_chunk(
+            conn, card_id, relative_name=relative_name, stream=stream,
+        )
+    except upload_service.UploadServiceError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(card.to_dict())
+
+
+@api_bp.route("/upload/<int:card_id>/finish", methods=["POST"])
+@login_required
+def api_upload_finish(card_id: int):
+    """Verify manifest; transition to verified (or released if auto)."""
+    from upload_staging import service as upload_service
+    conn = _conn_for_uploads()
+    if conn is None:
+        return jsonify({"error": "no DB"}), 503
+
+    card_pre = None
+    from db import uploads as db_uploads
+    card_pre = db_uploads.get_upload_card(conn, card_id)
+    if card_pre is None:
+        return jsonify({"error": "card not found"}), 404
+
+    eingang = _eingang_for(card_pre.discipline)
+    if eingang is None:
+        return jsonify({"error": "discipline no longer configured"}), 503
+
+    try:
+        card = upload_service.finish_upload(
+            conn, card_id, eingang_root=eingang,
+        )
+    except upload_service.UploadServiceError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    code = 200
+    if card.state == db_uploads.STATE_FAILED:
+        code = 422
+    return jsonify(card.to_dict()), code
+
+
+@api_bp.route("/upload/release", methods=["POST"])
+@login_required
+def api_upload_release():
+    """Release one or many verified cards via atomic rename.
+
+    Payload: {"card_ids": [int, ...]}
+    """
+    from upload_staging import service as upload_service
+    payload = request.get_json(silent=True) or {}
+    ids = payload.get("card_ids") or []
+    if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+        return jsonify({"error": "card_ids must be a list of ints"}), 400
+    conn = _conn_for_uploads()
+    if conn is None:
+        return jsonify({"error": "no DB"}), 503
+
+    try:
+        results = upload_service.release_many(
+            conn, ids, eingang_roots=_eingang_roots(),
+        )
+    except upload_service.UploadServiceError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({"released": [c.to_dict() for _id, c in results]})
+
+
+@api_bp.route("/upload/<int:card_id>/cancel", methods=["POST"])
+@login_required
+def api_upload_cancel(card_id: int):
+    from upload_staging import service as upload_service
+    conn = _conn_for_uploads()
+    if conn is None:
+        return jsonify({"error": "no DB"}), 503
+    try:
+        card = upload_service.cancel_upload(conn, card_id)
+    except upload_service.UploadServiceError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(card.to_dict())
+
+
+@api_bp.route("/upload/status", methods=["GET"])
+@login_required
+def api_upload_status():
+    """Snapshot for the client tool's polling loop."""
+    from upload_staging import service as upload_service
+    discipline = request.args.get("discipline")
+    tournament_id_raw = request.args.get("tournament_id")
+    tournament_id = int(tournament_id_raw) if tournament_id_raw else None
+    conn = _conn_for_uploads()
+    if conn is None:
+        return jsonify({"error": "no DB"}), 503
+    cards = upload_service.status_snapshot(
+        conn, tournament_id=tournament_id, discipline=discipline,
+    )
+    return jsonify({"cards": cards})
+
+
+# ---------------------------------------------------------------------------
 # Download routes
 # ---------------------------------------------------------------------------
 

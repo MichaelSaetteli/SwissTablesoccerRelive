@@ -103,6 +103,38 @@ CREATE TABLE IF NOT EXISTS archives (
     error           TEXT,
     FOREIGN KEY (tournament_id) REFERENCES tournaments(id) ON DELETE CASCADE
 );
+
+-- Upload-staging (Issue #15): one row per SD card upload session.
+-- The client tool POSTs upload-start with a freshly minted card_uuid,
+-- streams chunks into the staging directory, then either:
+--   * triggers upload-finish -> state=verified, operator releases later
+--   * triggers upload-finish with auto_release=1 -> state=released directly
+-- The atomic rename staging_path -> final_path is what hands the folder
+-- to the watcher.
+CREATE TABLE IF NOT EXISTS upload_cards (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_uuid       TEXT    NOT NULL UNIQUE,
+    tournament_id   INTEGER NOT NULL,
+    table_name      TEXT    NOT NULL,        -- 'ET01', 'ET02', ...
+    discipline      TEXT    NOT NULL,        -- 'Doppel'|'Einzel'
+    state           TEXT    NOT NULL,        -- uploading|verified|released|failed|cancelled|interrupted
+    expected_files  INTEGER NOT NULL DEFAULT 0,
+    expected_bytes  INTEGER NOT NULL DEFAULT 0,
+    received_files  INTEGER NOT NULL DEFAULT 0,
+    received_bytes  INTEGER NOT NULL DEFAULT 0,
+    staging_path    TEXT    NOT NULL,        -- absolute path to staging dir
+    final_path      TEXT,                    -- populated after release
+    auto_release    INTEGER NOT NULL DEFAULT 0,
+    error_message   TEXT,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL,
+    released_at     TEXT,
+    FOREIGN KEY (tournament_id) REFERENCES tournaments(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_upload_cards_tournament ON upload_cards(tournament_id);
+CREATE INDEX IF NOT EXISTS idx_upload_cards_state      ON upload_cards(state);
+CREATE INDEX IF NOT EXISTS idx_upload_cards_discipline ON upload_cards(discipline);
 """
 
 
@@ -193,6 +225,21 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     if "paused" not in existing_cols:
         conn.execute(
             "ALTER TABLE runs ADD COLUMN paused INTEGER NOT NULL DEFAULT 0"
+        )
+
+    # ---- Migration: Issue #15 adds expected_cards per discipline on tournaments ----
+    tournament_cols = {
+        row["name"] for row in conn.execute("PRAGMA table_info(tournaments)")
+    }
+    if "expected_cards_doppel" not in tournament_cols:
+        conn.execute(
+            "ALTER TABLE tournaments ADD COLUMN "
+            "expected_cards_doppel INTEGER NOT NULL DEFAULT 0"
+        )
+    if "expected_cards_einzel" not in tournament_cols:
+        conn.execute(
+            "ALTER TABLE tournaments ADD COLUMN "
+            "expected_cards_einzel INTEGER NOT NULL DEFAULT 0"
         )
 
 
