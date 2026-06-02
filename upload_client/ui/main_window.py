@@ -46,6 +46,13 @@ _WARN_BG = QColor(0xFF, 0xF4, 0xCE)   # amber: DCIM date-spread alarm
 _POLL_MS = 1500
 
 
+def _default_dcim_dialog(folders, selected, parent):
+    # Lazy import keeps the dialog (and its Qt widgets) out of the import
+    # path until actually needed, and lets tests inject a stub factory.
+    from upload_client.ui.dcim_dialog import DcimSelectionDialog
+    return DcimSelectionDialog(folders, selected, parent)
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -58,6 +65,7 @@ class MainWindow(QMainWindow):
         poll_ms: int = _POLL_MS,
         ingest_state=None,
         disciplines: Optional[List[str]] = None,
+        dcim_dialog_factory=None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -65,8 +73,11 @@ class MainWindow(QMainWindow):
         self._scan_fn = scan_fn
         self._watcher = watcher
         self._ingest_state = ingest_state
-        self._disciplines = disciplines or []
+        self._disciplines = disciplines or ["Einzel", "Doppel"]
+        self._dcim_dialog_factory = dcim_dialog_factory or _default_dcim_dialog
         self._row_of: Dict[str, int] = {}  # card key -> table row index
+        self._disc_combos: Dict[str, QComboBox] = {}  # key -> discipline combo
+        self._rows_by_key: Dict[str, object] = {}      # key -> latest CardRow
 
         title = "STS-Upload"
         if tournament_name:
@@ -150,6 +161,8 @@ class MainWindow(QMainWindow):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(_COL_DETAIL, QHeaderView.Stretch)
+        # Double-click a card with a date-spread alarm to choose its folders.
+        self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
         root.addWidget(self.table, 1)
 
         bottom = QHBoxLayout()
@@ -175,6 +188,50 @@ class MainWindow(QMainWindow):
             self._ingest_state.discipline = text or None
         if self._scan_fn is not None:
             self.on_scan()
+
+    @staticmethod
+    def _uuid_of(key: str) -> str:
+        return key[len("uuid:"):] if key.startswith("uuid:") else key
+
+    def _rescan_pending(self) -> None:
+        """Re-scan and update only not-yet-uploaded cards (override applied)."""
+        if self._scan_fn is None:
+            return
+        try:
+            inv = self._scan_fn()
+        except Exception:  # noqa: BLE001 - never crash on a correction
+            return
+        updater = getattr(self._manager, "update_pending", None)
+        (updater or self._manager.add_scanned)(inv)
+        self.refresh()
+
+    def on_card_discipline_changed(self, key: str, text: str) -> None:
+        """Per-card discipline override: re-map this card to *text*."""
+        if self._ingest_state is None or not text:
+            return
+        self._ingest_state.discipline_overrides[self._uuid_of(key)] = text
+        self._rescan_pending()
+
+    def on_cell_double_clicked(self, row: int, col: int) -> None:
+        for key, idx in self._row_of.items():
+            if idx == row:
+                self.open_dcim_selection(key)
+                return
+
+    def open_dcim_selection(self, key: str) -> None:
+        """Let the operator pick which DCIM folders of *key* to ingest."""
+        card_row = self._rows_by_key.get(key)
+        if card_row is None or not card_row.dcim_folders:
+            return
+        dlg = self._dcim_dialog_factory(
+            card_row.dcim_folders, set(card_row.selected_subdirs), self,
+        )
+        from PySide6.QtWidgets import QDialog
+        if dlg.exec() != QDialog.Accepted or self._ingest_state is None:
+            return
+        self._ingest_state.subdir_overrides[self._uuid_of(key)] = \
+            dlg.selected_names()
+        self._rescan_pending()
 
     def on_scan(self) -> None:
         try:
@@ -232,6 +289,7 @@ class MainWindow(QMainWindow):
     def refresh(self) -> None:
         snap = self._manager.snapshot()
         for row in snap.rows:
+            self._rows_by_key[row.key] = row
             self._upsert_row(row)
 
         self.lbl_summary.setText(
@@ -267,12 +325,26 @@ class MainWindow(QMainWindow):
             sel.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             sel.setCheckState(Qt.Unchecked)
             self.table.setItem(idx, _COL_SEL, sel)
-            for col in (_COL_TABLE, _COL_DISC, _COL_STATE, _COL_DETAIL,
+            for col in (_COL_TABLE, _COL_STATE, _COL_DETAIL,
                         _COL_DATE, _COL_REMOVE):
                 self.table.setItem(idx, col, QTableWidgetItem(""))
+            combo = QComboBox()
+            combo.addItems(self._disciplines)
+            combo.currentTextChanged.connect(
+                lambda text, k=row.key: self.on_card_discipline_changed(k, text)
+            )
+            self._disc_combos[row.key] = combo
+            self.table.setCellWidget(idx, _COL_DISC, combo)
 
         self.table.item(idx, _COL_TABLE).setText(row.table)
-        self.table.item(idx, _COL_DISC).setText(row.discipline)
+
+        # Discipline is an editable dropdown until the card starts uploading.
+        combo = self._disc_combos[row.key]
+        combo.blockSignals(True)
+        if row.discipline and combo.findText(row.discipline) >= 0:
+            combo.setCurrentText(row.discipline)
+        combo.setEnabled(row.editable_discipline)
+        combo.blockSignals(False)
 
         state_item = self.table.item(idx, _COL_STATE)
         state_item.setText(row.badge)

@@ -203,3 +203,31 @@ def test_statestore_parallel_writes_are_safe(tmp_path: Path) -> None:
 
     reopened = StateStore(tmp_path / "state.json")
     assert len(reopened.all()) == 8  # no lost/corrupt keys
+
+
+def test_update_pending_remaps_discipline_before_upload(env, tmp_path: Path) -> None:
+    make_card(tmp_path / "E01", tournament_id=env["tid"])
+    at = _active(env["tid"])
+    mgr = _manager(env)
+    mgr.add_scanned(scan_mounts([tmp_path / "E01"], discipline="Einzel",
+                                active_tournaments=at))
+    mgr.update_pending(scan_mounts([tmp_path / "E01"], discipline="Doppel",
+                                   active_tournaments=at))
+    snap = mgr.snapshot()
+    assert snap.rows[0].discipline == "Doppel"
+
+
+def test_update_pending_does_not_disturb_uploaded(env, tmp_path: Path) -> None:
+    make_card(tmp_path / "E01", tournament_id=env["tid"])
+    at = _active(env["tid"])
+    mgr = _manager(env)
+    mgr.add_scanned(scan_mounts([tmp_path / "E01"], discipline="Einzel",
+                                active_tournaments=at))
+    mgr.start_all(auto_release=False)
+    mgr.shutdown(wait=True)
+    # Attempt to re-map after it verified -> must be ignored.
+    mgr.update_pending(scan_mounts([tmp_path / "E01"], discipline="Doppel",
+                                   active_tournaments=at))
+    snap = mgr.snapshot()
+    assert snap.rows[0].discipline == "Einzel"
+    assert snap.rows[0].state == CLIENT_VERIFIED

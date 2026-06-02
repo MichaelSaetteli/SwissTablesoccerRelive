@@ -131,6 +131,10 @@ class CardRow:
     error_detail: Optional[str] = None
     stale_alarm: bool = False        # DCIM folders >3 days apart
     date_range: str = ""             # human date span of the DCIM folders
+    card_uuid: str = ""              # stable id (for per-card overrides)
+    dcim_folders: tuple = ()         # DcimFolder list (for the selection dialog)
+    selected_subdirs: tuple = ()     # currently selected DCIM names
+    editable_discipline: bool = False  # True until the upload has started
 
 
 def row_for_progress(p: CardProgress) -> CardRow:
@@ -156,6 +160,7 @@ def row_for_progress(p: CardProgress) -> CardRow:
         release_tooltip=release_tooltip(p.state),
         is_error=p.state == CLIENT_FAILED,
         error_detail=p.error if p.state == CLIENT_FAILED else None,
+        card_uuid=p.card_uuid,
     )
 
 
@@ -192,6 +197,10 @@ def row_for_scanned(c: ScannedCard) -> CardRow:
         error_detail=c.reason if is_error else None,
         stale_alarm=c.stale_alarm,
         date_range=_dcim_date_range(c),
+        card_uuid=c.card_uuid or (c.marker.card_uuid if c.marker else ""),
+        dcim_folders=tuple(c.dcim_folders),
+        selected_subdirs=tuple(c.selected_subdirs),
+        editable_discipline=True,   # scanned, not yet uploading
     )
 
 

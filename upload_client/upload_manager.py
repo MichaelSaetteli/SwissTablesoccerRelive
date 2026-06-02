@@ -82,6 +82,29 @@ class UploadManager:
             for key, card in cards.items():
                 self._tracked.setdefault(key, card)
 
+    def update_pending(self, cards: Dict[str, ScannedCard]) -> None:
+        """Re-apply a scan, replacing cards that have NOT started uploading.
+
+        Used when the operator corrects a card's discipline or DCIM
+        selection before upload: the card's view (discipline / table /
+        manifest) must update. A card already uploading/verified/released is
+        left untouched, so a correction can never disturb in-flight work.
+        """
+        with self._lock:
+            for key, card in cards.items():
+                existing = self._tracked.get(key)
+                if existing is None:
+                    self._tracked[key] = card
+                    continue
+                uuid = existing.card_uuid or (
+                    existing.marker.card_uuid if existing.marker else None
+                )
+                if uuid is not None:
+                    p = self._engine.load(uuid)
+                    if p is not None and p.state != CLIENT_PENDING:
+                        continue  # in-flight or done -> keep as is
+                self._tracked[key] = card
+
     # -- actions -----------------------------------------------------------
 
     def start_all(self, *, auto_release: bool) -> None:

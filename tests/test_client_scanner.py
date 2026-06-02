@@ -152,3 +152,15 @@ def test_merge_is_additive(tmp_path: Path) -> None:
                          volume_reader=_reader("E01", serial="A"))
     merged = merge_scans(first, rescan)
     assert merged[original.key] is original
+
+
+def test_card_keeps_key_across_discipline_change(tmp_path: Path) -> None:
+    root = _card(tmp_path / "c", {"100": ["a.mp4"]})
+    einzel = scan_card(root, discipline="Einzel", active_tournaments=ACTIVE,
+                       volume_reader=_reader("E01", serial="S1"))
+    doppel = scan_card(root, discipline="Doppel",
+                       active_tournaments={"Einzel": {"id": 42, "name": "T"}},
+                       volume_reader=_reader("E01", serial="S1"))
+    assert einzel.status == CARD_READY
+    assert doppel.status == CARD_NO_TOURNAMENT     # no active Doppel tournament
+    assert einzel.key == doppel.key                # same physical card, same row

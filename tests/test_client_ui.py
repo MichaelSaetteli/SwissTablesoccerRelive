@@ -243,3 +243,60 @@ def test_date_and_alarm_rendered_in_row(qapp):
     idx = win._row_of["u1"]
     text = win.table.item(idx, _COL_DATE).text()
     assert "22.05.2026" in text and "⚠" in text  # warning sign
+
+
+class _UpdManager(StubManager):
+    def update_pending(self, inv) -> None:
+        self.calls.append(("update_pending", inv))
+
+
+def test_per_card_discipline_combo_sets_override(qapp):
+    from upload_client.ui.app import IngestState
+    from upload_client.upload_engine import CLIENT_PENDING
+
+    state = IngestState(discipline="Einzel")
+    row = _row("uuid:vol-1", "ET01", CLIENT_PENDING,
+               card_uuid="vol-1", editable_discipline=True)
+    win = MainWindow(_UpdManager(_snapshot([row])), scan_fn=lambda: {},
+                     ingest_state=state, disciplines=["Einzel", "Doppel"],
+                     poll_ms=10_000)
+    win._disc_combos["uuid:vol-1"].setCurrentText("Doppel")
+    assert state.discipline_overrides["vol-1"] == "Doppel"
+    assert any(c[0] == "update_pending" for c in win._manager.calls)
+
+
+def test_dcim_dialog_stores_subdir_override(qapp):
+    from datetime import datetime
+    from pathlib import Path as _Path
+
+    from upload_client.dcim import DcimFolder
+    from upload_client.ui.app import IngestState
+    from upload_client.upload_engine import CLIENT_PENDING
+
+    class StubDialog:
+        def __init__(self, folders, selected, parent):
+            self.folders = folders
+
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+            return QDialog.Accepted
+
+        def selected_names(self):
+            return {"NEW"}
+
+    folders = (
+        DcimFolder(path=_Path("OLD"), name="OLD",
+                   created=datetime(2026, 1, 1), video_count=1, video_bytes=1),
+        DcimFolder(path=_Path("NEW"), name="NEW",
+                   created=datetime(2026, 5, 1), video_count=1, video_bytes=1),
+    )
+    state = IngestState(discipline="Einzel")
+    row = _row("uuid:vol-9", "ET09", CLIENT_PENDING, card_uuid="vol-9",
+               editable_discipline=True, stale_alarm=True,
+               dcim_folders=folders, selected_subdirs=("NEW",))
+    win = MainWindow(_UpdManager(_snapshot([row])), scan_fn=lambda: {},
+                     ingest_state=state, disciplines=["Einzel", "Doppel"],
+                     dcim_dialog_factory=StubDialog, poll_ms=10_000)
+    win.open_dcim_selection("uuid:vol-9")
+    assert state.subdir_overrides["vol-9"] == {"NEW"}
+    assert any(c[0] == "update_pending" for c in win._manager.calls)

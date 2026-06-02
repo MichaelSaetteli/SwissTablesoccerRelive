@@ -48,7 +48,11 @@ Einzelne Karten freigeben: Hakchen in der Zeile setzen und unten
 | ⚠ Fehler | Problem | Uebertragung unvollstaendig — siehe unten |
 | ⛔ unterbrochen | pausiert | Karte wurde entfernt — wieder einstecken |
 | 🔒 gesperrt | gesperrt | Kartenname ohne Tischnummer, oder kein aktives Turnier |
-| ⚠ (Datum-Spalte) | Achtung | Aufnahme-Ordner liegen **mehr als 3 Tage** auseinander — evtl. alte Daten drauf. Zeile gelb. Pruefen, welche Ordner eingelesen werden sollen (Default: die neuesten). |
+| ⚠ (Datum-Spalte) | Achtung | Aufnahme-Ordner liegen **mehr als 3 Tage** auseinander — evtl. alte Daten drauf. Zeile gelb. **Doppelklick auf die Zeile** oeffnet die Ordner-Auswahl (Default: die neuesten an, alte aus). |
+
+**Disziplin pro Karte korrigieren:** Stimmt bei einer Karte die Disziplin
+nicht, stell sie direkt in der **Disziplin-Spalte** (Dropdown) um — geht nur,
+solange die Karte noch nicht hochgeladen ist.
 
 **Entfernen-Spalte:**
 * **🔌 sicher entfernbar** — die Karte darf raus (verifiziert oder

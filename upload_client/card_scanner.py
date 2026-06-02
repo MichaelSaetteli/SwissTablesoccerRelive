@@ -61,13 +61,20 @@ class ScannedCard:
     reason: Optional[str] = None
     label: Optional[str] = None               # volume name, e.g. "E01"
     serial: Optional[str] = None
+    card_uuid: Optional[str] = None           # stable id, even when locked
     dcim_folders: Tuple[DcimFolder, ...] = ()
     selected_subdirs: Tuple[str, ...] = ()    # DCIM names included in upload
     stale_alarm: bool = False                 # folders >3 days apart
 
     @property
     def key(self) -> str:
-        """Stable inventory key (the physical card's id, slot-independent)."""
+        """Stable inventory key (the physical card's id, slot-independent).
+
+        Uses the card id even for locked cards, so correcting a card's
+        discipline (which may briefly lock it) keeps the same row.
+        """
+        if self.card_uuid:
+            return f"uuid:{self.card_uuid}"
         if self.marker is not None:
             return f"uuid:{self.marker.card_uuid}"
         return f"path:{self.root}"
@@ -98,12 +105,16 @@ def scan_card(
     root = Path(root)
     info = read_volume_info(root, reader=volume_reader)
     label, serial = info.label, info.serial
+    card_uuid = card_uuid_override or card_uuid_from(
+        serial=serial, label=label, root=root,
+    )
     discipline = discipline or discipline_hint_from_label(label)
 
     table = table_from_label(label)
     if table is None:
         return ScannedCard(
             root=root, status=CARD_NO_TABLE, label=label, serial=serial,
+            card_uuid=card_uuid,
             reason=(
                 f"Datentraegername {label!r} enthaelt keine Tischnummer "
                 f"(erwartet z.B. E01). Karte umbenennen."
@@ -114,6 +125,7 @@ def scan_card(
     if not tinfo or not tinfo.get("id"):
         return ScannedCard(
             root=root, status=CARD_NO_TOURNAMENT, label=label, serial=serial,
+            card_uuid=card_uuid,
             reason=f"Kein aktives {discipline or '?'}-Turnier auf dem Server.",
         )
 
@@ -124,9 +136,6 @@ def scan_card(
     else:
         selected = default_selected_names(folders)
 
-    card_uuid = card_uuid_override or card_uuid_from(
-        serial=serial, label=label, root=root,
-    )
     marker = CardMarker(
         card_uuid=card_uuid,
         tournament_id=int(tinfo["id"]),
@@ -144,14 +153,16 @@ def scan_card(
     if manifest.is_empty:
         return ScannedCard(
             root=root, status=CARD_EMPTY, marker=marker, manifest=manifest,
-            label=label, serial=serial, dcim_folders=tuple(folders),
+            label=label, serial=serial, card_uuid=card_uuid,
+            dcim_folders=tuple(folders),
             selected_subdirs=selected_tuple, stale_alarm=alarm,
             reason="Keine Videodateien in der aktuellen Auswahl.",
         )
 
     return ScannedCard(
         root=root, status=CARD_READY, marker=marker, manifest=manifest,
-        label=label, serial=serial, dcim_folders=tuple(folders),
+        label=label, serial=serial, card_uuid=card_uuid,
+        dcim_folders=tuple(folders),
         selected_subdirs=selected_tuple, stale_alarm=alarm,
     )
 

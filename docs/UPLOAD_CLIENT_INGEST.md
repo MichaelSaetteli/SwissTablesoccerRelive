@@ -86,12 +86,13 @@ Umgesetzt + getestet (headless + offscreen-GUI):
 * `.mp4`-Whitelist + Unterordner-Auswahl im Manifest.
 * Scanner mit synthetischem Marker; Batch-Disziplin-Auswahl in der GUI;
   Datum-Spalte + Alarm-Anzeige.
+* **Per-Karte-Bedienelemente**: Disziplin-Dropdown pro Zeile (nur vor
+  Upload aenderbar) und DCIM-Auswahl-Dialog per Doppelklick auf die Zeile
+  (`ui/dcim_dialog.py`). Eine Korrektur aktualisiert nur noch-nicht-
+  hochgeladene Karten (`UploadManager.update_pending`); laufende/fertige
+  bleiben unangetastet.
 
-Noch offen (siehe `SESSION_HANDOFF.md`):
+Noch offen:
 
-* **Per-Karte interaktive UI**: Dropdown zur Disziplin-Korrektur pro Zeile
-  und Dialog zur DCIM-Unterordner-Auswahl bei Alarm. Die Logik
-  (`discipline_overrides` / `subdir_overrides` in `IngestState`) ist bereits
-  vorhanden und durchgereicht — es fehlt nur das GUI-Bedienelement.
-* **Visueller/funktionaler Check auf Windows** (GUI offscreen getestet, aber
-  nicht visuell) inkl. echtem Auslesen von Volume-Name + Seriennummer.
+* **Visueller/funktionaler Check auf Windows** (GUI bisher nur offscreen
+  getestet) inkl. echtem Auslesen von Volume-Name + Seriennummer.
