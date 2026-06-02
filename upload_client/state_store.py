@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -22,11 +23,17 @@ SCHEMA_VERSION = 1
 
 
 class StateStore:
-    """A tiny JSON document mapping ``card_uuid`` -> card record dict."""
+    """A tiny JSON document mapping ``card_uuid`` -> card record dict.
+
+    Thread-safe: the GUI uploads several cards in parallel (1-24 reader
+    slots), so every accessor takes a re-entrant lock around the in-memory
+    dict and the atomic file write.
+    """
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self._cards: Dict[str, dict] = {}
+        self._lock = threading.RLock()
         self._load()
 
     # -- persistence -------------------------------------------------------
@@ -58,21 +65,26 @@ class StateStore:
     # -- accessors ---------------------------------------------------------
 
     def get(self, card_uuid: str) -> Optional[dict]:
-        rec = self._cards.get(card_uuid)
-        return copy.deepcopy(rec) if rec is not None else None
+        with self._lock:
+            rec = self._cards.get(card_uuid)
+            return copy.deepcopy(rec) if rec is not None else None
 
     def all(self) -> Dict[str, dict]:
-        return copy.deepcopy(self._cards)
+        with self._lock:
+            return copy.deepcopy(self._cards)
 
     def put(self, card_uuid: str, record: dict) -> None:
-        self._cards[card_uuid] = copy.deepcopy(record)
-        self._flush()
-
-    def remove(self, card_uuid: str) -> None:
-        if card_uuid in self._cards:
-            del self._cards[card_uuid]
+        with self._lock:
+            self._cards[card_uuid] = copy.deepcopy(record)
             self._flush()
 
+    def remove(self, card_uuid: str) -> None:
+        with self._lock:
+            if card_uuid in self._cards:
+                del self._cards[card_uuid]
+                self._flush()
+
     def clear(self) -> None:
-        self._cards = {}
-        self._flush()
+        with self._lock:
+            self._cards = {}
+            self._flush()
