@@ -684,6 +684,21 @@ def api_upload_release():
     return jsonify({"released": [c.to_dict() for _id, c in results]})
 
 
+@api_bp.route("/upload/<int:card_id>/reopen", methods=["POST"])
+@login_required
+def api_upload_reopen(card_id: int):
+    """Reopen a failed card (failed -> uploading) for an in-place retry."""
+    from upload_staging import service as upload_service
+    conn = _conn_for_uploads()
+    if conn is None:
+        return jsonify({"error": "no DB"}), 503
+    try:
+        card = upload_service.reopen_upload(conn, card_id)
+    except upload_service.UploadServiceError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(card.to_dict())
+
+
 @api_bp.route("/upload/<int:card_id>/cancel", methods=["POST"])
 @login_required
 def api_upload_cancel(card_id: int):

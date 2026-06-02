@@ -1,0 +1,51 @@
+name: Release Upload Client
+
+# Push a tag like `upload-client-v1` (or `upload-client-v1.2`) to build the
+# Windows .exe and publish it as a GitHub Release with the .exe attached, so
+# operators download a versioned binary straight from the Releases page.
+#
+# The build steps intentionally mirror build-upload-client.yml (kept
+# self-contained rather than via a reusable workflow - fewer moving parts).
+
+on:
+  push:
+    tags:
+      - 'upload-client-v*'
+
+permissions:
+  contents: write          # required to create the GitHub Release
+
+jobs:
+  release:
+    name: Build .exe + publish release
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install client deps + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-client.txt pyinstaller
+
+      - name: Smoke-import the GUI (fail fast before the long build)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "import upload_client.ui.app; print('upload_client.ui imports OK')"
+
+      - name: Build single-file .exe
+        run: pyinstaller upload_client.spec --noconfirm --log-level WARN
+
+      - name: Publish GitHub Release with the .exe
+        uses: softprops/action-gh-release@v2
+        with:
+          name: STS-Upload ${{ github.ref_name }}
+          files: dist/STS-Upload.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true

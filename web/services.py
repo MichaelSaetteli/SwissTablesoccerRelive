@@ -378,6 +378,21 @@ def list_tournaments_for(config: PipelineConfig) -> List[Dict[str, object]]:
     return [t.to_dict() for t in list_tournaments(conn)]
 
 
+_INT_TOURNAMENT_FIELDS = (
+    "max_workers", "expected_cards_doppel", "expected_cards_einzel",
+)
+
+
+def _coerce_int_fields(clean: Dict[str, object]) -> None:
+    """Coerce numeric tournament fields to int; drop unparseable ones."""
+    for key in _INT_TOURNAMENT_FIELDS:
+        if key in clean:
+            try:
+                clean[key] = int(clean[key])  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                del clean[key]
+
+
 def create_tournament_for(
     config: PipelineConfig, payload: Dict[str, object],
 ) -> Optional[Dict[str, object]]:
@@ -392,13 +407,10 @@ def create_tournament_for(
         return None
     allowed = ("date", "location", "organizer", "disciplines",
                "youtube_channel", "visibility_default", "video_prefix",
-               "description_template", "tags", "max_workers")
+               "description_template", "tags", "max_workers",
+               "expected_cards_doppel", "expected_cards_einzel")
     clean = {k: payload[k] for k in allowed if k in payload}
-    if "max_workers" in clean:
-        try:
-            clean["max_workers"] = int(clean["max_workers"])
-        except (TypeError, ValueError):
-            del clean["max_workers"]
+    _coerce_int_fields(clean)
     t = create_tournament(conn, name, **clean)
     return t.to_dict()
 
@@ -413,13 +425,10 @@ def update_tournament_for(
     conn = open_db(db_path)
     allowed = ("name", "date", "location", "organizer", "disciplines",
                "youtube_channel", "visibility_default", "video_prefix",
-               "description_template", "tags", "max_workers")
+               "description_template", "tags", "max_workers",
+               "expected_cards_doppel", "expected_cards_einzel")
     clean = {k: payload[k] for k in allowed if k in payload}
-    if "max_workers" in clean:
-        try:
-            clean["max_workers"] = int(clean["max_workers"])
-        except (TypeError, ValueError):
-            del clean["max_workers"]
+    _coerce_int_fields(clean)
     updated = update_tournament(conn, tournament_id, **clean)
     return updated.to_dict() if updated else None
 

@@ -1,0 +1,57 @@
+name: Build Upload Client (Windows)
+
+# Builds the operator upload tool (Issue #15) into a single-file Windows
+# .exe and publishes it as a build artifact. PyInstaller cannot
+# cross-compile, so this runs on a Windows runner - the artifact is what
+# the admin downloads and hands to the operators (docs/UPLOAD_CLIENT_ADMIN.md).
+
+on:
+  workflow_dispatch: {}        # manual: build on demand before a tournament
+  push:
+    # NOTE: do not add a `tags:` filter here without also listing `branches:` -
+    # a tags filter alone makes push tag-only and silently skips branch pushes.
+    paths:
+      - 'upload_client/**'
+      - 'upload_client.spec'
+      - 'scripts/sts_upload_gui.py'
+      - 'requirements-client.txt'
+      - '.github/workflows/build-upload-client.yml'
+
+jobs:
+  build-windows:
+    name: PyInstaller onefile (.exe)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install client deps + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-client.txt pyinstaller
+
+      - name: Smoke-import the GUI (fail fast before the long build)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "import upload_client.ui.app; print('upload_client.ui imports OK')"
+
+      - name: Build single-file .exe
+        run: pyinstaller upload_client.spec --noconfirm --log-level WARN
+
+      - name: Show artifact
+        shell: pwsh
+        run: Get-Item dist/STS-Upload.exe | Select-Object Name, Length, LastWriteTime
+
+      - name: Upload .exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: STS-Upload-windows
+          path: dist/STS-Upload.exe
+          if-no-files-found: error
+          retention-days: 30
