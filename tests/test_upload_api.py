@@ -209,6 +209,30 @@ def test_manifest_mismatch_marks_failed_returns_422(client, tournament_id):
     assert "files" in body["error_message"]
 
 
+def test_expected_card_counts_are_settable_and_surface(client, configs):
+    _login(client)
+    created = client.post(
+        "/api/tournaments/Einzel",
+        json={"name": "Seetal 2026", "expected_cards_einzel": 30,
+              "expected_cards_doppel": 24},
+    ).get_json()
+    tid = created["id"]
+    assert created["expected_cards_einzel"] == 30
+
+    client.post(f"/api/tournaments/Einzel/{tid}/activate")
+    client.post(f"/api/tournaments/Doppel/{tid}/activate")
+
+    body = client.get("/api/upload/active-tournament").get_json()
+    assert body["disciplines"]["Einzel"]["expected_cards_einzel"] == 30
+    assert body["disciplines"]["Doppel"]["expected_cards_doppel"] == 24
+
+    # And they can be patched afterwards.
+    client.patch(f"/api/tournaments/Einzel/{tid}",
+                 json={"expected_cards_einzel": 28})
+    body = client.get("/api/upload/active-tournament").get_json()
+    assert body["disciplines"]["Einzel"]["expected_cards_einzel"] == 28
+
+
 def test_reopen_failed_card_allows_retry_to_verify(client, tournament_id):
     _login(client)
     started = _start(

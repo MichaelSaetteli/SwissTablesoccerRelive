@@ -32,6 +32,8 @@ class Tournament:
     description_template: str = ""
     tags: str = ""
     max_workers: int = 4
+    expected_cards_doppel: int = 0
+    expected_cards_einzel: int = 0
     created_at: Optional[str] = None
     is_auto_created: bool = False
     archived_at: Optional[str] = None
@@ -49,6 +51,7 @@ _EDITABLE_COLUMNS = (
     "name", "date", "location", "organizer", "disciplines",
     "youtube_channel", "visibility_default", "video_prefix",
     "description_template", "tags", "max_workers",
+    "expected_cards_doppel", "expected_cards_einzel",
     "archived_at", "archive_path",
 )
 
@@ -67,6 +70,8 @@ def _row_to_tournament(row: sqlite3.Row) -> Tournament:
         description_template=row["description_template"] or "",
         tags=row["tags"] or "",
         max_workers=int(row["max_workers"] or 4),
+        expected_cards_doppel=int(row["expected_cards_doppel"] or 0),
+        expected_cards_einzel=int(row["expected_cards_einzel"] or 0),
         created_at=row["created_at"],
         is_auto_created=bool(row["is_auto_created"]),
         archived_at=row["archived_at"],
