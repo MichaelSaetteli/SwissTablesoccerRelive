@@ -20,6 +20,7 @@ from pipeline.merge_ffmpeg import (
     list_video_files,
     merge_all,
     merge_folder,
+    verify_output_duration,
     write_concat_list,
 )
 from tests.conftest import make_mp4
@@ -242,3 +243,83 @@ def test_merge_all_partial_failure(tmp_path: Path,
     assert by_folder["ET03"].success is True
     assert by_folder["ET04"].success is False
     assert "boom" in by_folder["ET04"].stderr
+
+
+# ---------------------------------------------------------------------------
+# Output-duration verification (silent stream-copy failure guard)
+# ---------------------------------------------------------------------------
+
+def _prober(*, input_dur: float, output_dur):
+    """Fake prober: .partial.mp4 -> output_dur, any input -> input_dur."""
+    def probe(path: Path):
+        if path.name.endswith(".partial.mp4"):
+            return output_dur
+        return input_dur
+    return probe
+
+
+def test_verify_output_duration_passes_within_tolerance(tmp_path: Path) -> None:
+    inputs = [tmp_path / "video_001.mp4", tmp_path / "video_002.mp4"]
+    out = tmp_path / ".x.partial.mp4"
+    # expected 20.0, output 20.3 -> within max(1.0, 1%) tolerance
+    probe = _prober(input_dur=10.0, output_dur=20.3)
+    assert verify_output_duration(inputs, out, probe) is None
+
+
+def test_verify_output_duration_flags_truncated_output(tmp_path: Path) -> None:
+    inputs = [tmp_path / "video_001.mp4", tmp_path / "video_002.mp4"]
+    out = tmp_path / ".x.partial.mp4"
+    probe = _prober(input_dur=10.0, output_dur=5.0)  # expected 20, got 5
+    problem = verify_output_duration(inputs, out, probe)
+    assert problem is not None
+    assert "truncated/corrupt" in problem
+
+
+def test_verify_output_duration_skips_when_unprobeable(tmp_path: Path) -> None:
+    inputs = [tmp_path / "video_001.mp4"]
+    out = tmp_path / ".x.partial.mp4"
+    # ffprobe could not read the output -> do not block the merge
+    assert verify_output_duration(inputs, out, lambda p: None) is None
+    # output ok but an input is unprobeable -> also skip
+    def half_none(path: Path):
+        return 10.0 if path.name.endswith(".partial.mp4") else None
+    assert verify_output_duration(inputs, out, half_none) is None
+
+
+def test_merge_folder_fails_on_duration_mismatch(
+    tmp_path: Path, doppel_config_path: Path,
+) -> None:
+    cfg = load_config(doppel_config_path)
+    folder = tmp_path / "ET07"
+    folder.mkdir()
+    make_mp4(folder, "video_001.mp4")
+    make_mp4(folder, "video_002.mp4")
+
+    runner = FakeRunner(returncode=0)              # ffmpeg "succeeds"
+    probe = _prober(input_dur=10.0, output_dur=3.0)  # but output is truncated
+    result = merge_folder(folder, cfg, runner=runner, prober=probe)
+
+    assert result.success is False
+    assert result.returncode == 0                  # rc was 0 - the guard caught it
+    assert "duration-check" in result.stderr
+    assert not result.output.is_file()             # NOT promoted
+    # partial cleaned up so a re-run starts fresh
+    partial = cfg.paths.output / f".{result.output.stem}.partial.mp4"
+    assert not partial.exists()
+
+
+def test_merge_folder_promotes_when_duration_ok(
+    tmp_path: Path, doppel_config_path: Path,
+) -> None:
+    cfg = load_config(doppel_config_path)
+    folder = tmp_path / "ET08"
+    folder.mkdir()
+    make_mp4(folder, "video_001.mp4")
+    make_mp4(folder, "video_002.mp4")
+
+    runner = FakeRunner(returncode=0)
+    probe = _prober(input_dur=10.0, output_dur=20.0)  # matches expected
+    result = merge_folder(folder, cfg, runner=runner, prober=probe)
+
+    assert result.success is True
+    assert result.output.is_file()

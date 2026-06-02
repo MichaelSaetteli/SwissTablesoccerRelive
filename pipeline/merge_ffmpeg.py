@@ -102,10 +102,74 @@ def build_ffmpeg_command(concat_list: Path, output: Path) -> List[str]:
 # ---------------------------------------------------------------------------
 
 Runner = Callable[[List[str]], "subprocess.CompletedProcess[str]"]
+# Probes a media file's duration in seconds, or None if undeterminable.
+Prober = Callable[[Path], Optional[float]]
 
 
 def _default_runner(cmd: List[str]) -> "subprocess.CompletedProcess[str]":
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+
+def _default_prober(path: Path) -> Optional[float]:
+    """Return the container duration in seconds via ffprobe, else None.
+
+    Best-effort: any failure (ffprobe missing, non-zero exit, unparseable
+    output) returns None so the caller treats the merge as *unverified*
+    rather than failed - we never block a good merge just because probing
+    was unavailable.
+    """
+    try:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error",
+             "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        return float(completed.stdout.strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def verify_output_duration(
+    inputs: Sequence[Path],
+    output: Path,
+    prober: Prober,
+    *,
+    min_tolerance_s: float = 1.0,
+    tolerance_frac: float = 0.01,
+) -> Optional[str]:
+    """Catch silent stream-copy failures (ffmpeg rc=0 but truncated output).
+
+    A stream-copy concat aborts on a corrupt input but can still exit 0,
+    leaving a short/broken file that would otherwise be "successfully"
+    uploaded. We compare the merged duration against the sum of the input
+    durations.
+
+    Returns ``None`` when the check passes OR cannot be performed (any
+    duration undeterminable - we never block on missing ffprobe); returns a
+    human-readable reason string when the durations disagree beyond
+    ``max(min_tolerance_s, tolerance_frac * expected)``.
+    """
+    out_duration = prober(output)
+    if out_duration is None:
+        return None  # cannot verify -> do not block
+    input_durations = [prober(p) for p in inputs]
+    if any(d is None for d in input_durations):
+        return None  # cannot compute the expectation -> do not block
+    expected = sum(d for d in input_durations if d is not None)
+    tolerance = max(min_tolerance_s, tolerance_frac * expected)
+    if abs(out_duration - expected) > tolerance:
+        return (
+            f"output duration {out_duration:.1f}s deviates from expected "
+            f"{expected:.1f}s by more than {tolerance:.1f}s - the merge likely "
+            f"produced a truncated/corrupt file despite ffmpeg returncode 0"
+        )
+    return None
 
 
 def _write_ffmpeg_log(
@@ -152,6 +216,7 @@ def merge_folder(
     folder: Path,
     config: PipelineConfig,
     runner: Optional[Runner] = None,
+    prober: Optional[Prober] = None,
 ) -> MergeResult:
     """Merge all ``video_*.mp4`` files in *folder* into a single output mp4.
 
@@ -192,6 +257,17 @@ def merge_folder(
 
     success = completed.returncode == 0
     stderr = completed.stderr or ""
+
+    # Guard against silent stream-copy failures: ffmpeg can exit 0 while
+    # producing a truncated file when an input aborts mid-stream. Verify the
+    # merged duration against the inputs before promoting the partial.
+    if success and partial_path.is_file():
+        probe = prober or _default_prober
+        duration_problem = verify_output_duration(files, partial_path, probe)
+        if duration_problem is not None:
+            success = False
+            stderr = (f"{stderr}\n" if stderr else "") + \
+                f"[duration-check] {duration_problem}"
 
     log_path = _write_ffmpeg_log(config, folder, cmd, completed)
 
@@ -238,6 +314,7 @@ def merge_all(
     folders: Iterable[Path],
     config: PipelineConfig,
     runner: Optional[Runner] = None,
+    prober: Optional[Prober] = None,
 ) -> List[MergeResult]:
     """Run ``merge_folder`` over *folders* in parallel using ThreadPoolExecutor."""
     folders = list(folders)
@@ -247,7 +324,7 @@ def merge_all(
     results: List[MergeResult] = []
     with ThreadPoolExecutor(max_workers=config.max_workers) as executor:
         future_to_folder = {
-            executor.submit(merge_folder, folder, config, runner): folder
+            executor.submit(merge_folder, folder, config, runner, prober): folder
             for folder in folders
         }
         for future in as_completed(future_to_folder):
