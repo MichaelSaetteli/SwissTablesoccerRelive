@@ -1,7 +1,8 @@
 # Session-Handoff — SwissTablesoccerRelive
 
 **Letzter Update:** 2026-06-02
-**Letzte Session:** Slice 1 von Issue #15 (STS-Upload Server-Vertrag)
+**Letzte Session:** Slice 2 von Issue #15, Block 1 (PySide6-Client — headless
+Core) auf Branch `claude/serene-fermi-pOUQb`
 
 Dieses Dokument ist der **eine Anlaufpunkt** fuer eine neue Claude-Session
 oder einen neuen Mitleser. Wer hier alles liest, hat den Kontext den die
@@ -37,9 +38,17 @@ laufende Arbeit braucht — die volle Chat-Historie ist nicht noetig.
 | Nummer | Titel | Status |
 |---|---|---|
 | PR #13 | fix(archive): include work_ so originals survive | Code-Review erledigt, mergebar |
-| PR #16 | feat(upload): server contract for the operator upload tool | Slice 1, gerade gepusht |
-| Issue #14 | Auto-extract MP4s from SD card DCIM subfolders (Luecke A) | open — wird durch Issue #15 obsolet |
-| Issue #15 | STS-Upload client tool (zero-error operator upload) | active — Slice 2 als Next |
+| PR #16 | feat(upload): server contract for the operator upload tool | Slice 1, offen. **Achtung:** der `POST /api/upload/<id>/reopen`-Endpoint wurde NACH #16 auf dem Slice-2-Branch `claude/serene-fermi-pOUQb` nachgeruestet — beim Merge von #16 ist er noch NICHT dabei, kommt erst mit Slice 2. |
+| Issue #14 | Auto-extract MP4s from SD card DCIM subfolders (Luecke A) | open — durch Issue #15 Slice 2 (DCIM-Flatten im Client) konzeptionell geschlossen |
+| Issue #15 | STS-Upload client tool (zero-error operator upload) | active — Slice 2 Block 1 (Core) erledigt auf `claude/serene-fermi-pOUQb`; naechstes: PySide6-GUI |
+
+**Branch `claude/serene-fermi-pOUQb` (Slice 2)** ist auf `feat/upload-staging-server`
+(PR #16) basiert, damit der Client lokal gegen den echten Server round-trip-getestet
+werden kann. Block 1 geliefert: `upload_client/`-Paket (marker, manifest mit
+order-preserving DCIM-Flatten, api_client, card_scanner, atomares resume-state,
+upload_engine) + 50 Client-Tests (inkl. End-to-End gegen den echten Flask-
+Server). Zusaetzlich Slice-1-seitig nachgeruestet: der
+`reopen`-Endpoint (failed -> uploading, in-place retry) — siehe PR-#16-Zeile.
 
 ## 4. Bekannte Bugs, die noch nicht gefixt sind
 
@@ -169,6 +178,15 @@ fehler** entschieden, nicht „nice to have":
 * **Plattform-MVP**: Windows. macOS/Linux nach Bedarf spaeter.
 * **Auto-Update**: nicht im MVP. Admin verteilt neue Versionen pro
   Turnier.
+* **DCIM-Flatten / Merge (Operator-Entscheid 2026-06-02, gesetzt)**: Alle
+  `.MP4` eines Tisches — auch ueber mehrere DCIM-Unterordner / Aufnahme-
+  Sessions verteilt — werden in EINEN `ETxx`-Ordner geflattet und zusammen
+  gemerged. **KEIN `ETxx_1`/`ETxx_2`-Split.** Reihenfolge bleibt erhalten:
+  der Client vergibt flache Namen, deren lexikalische Sortierung der Walk-
+  Reihenfolge (Unterordner, dann Dateiname) entspricht — die Pipeline merged
+  in genau dieser Sortierung (`pipeline/rename_mp4.py`, nicht-rekursiv). Das
+  schliesst die zuvor offene Frage aus Issue #15 („zwei Sessions → splitten?").
+  Implementiert in `upload_client/manifest.py::_flat_names`.
 
 ### Was bewusst NICHT zum MVP gehoert
 
@@ -188,6 +206,9 @@ fehler** entschieden, nicht „nice to have":
 * `POST /api/upload/<id>/finish` — Manifest-Verify, optional Auto-Release
 * `POST /api/upload/release` — atomic rename, single oder batch
 * `POST /api/upload/<id>/cancel`
+* `POST /api/upload/<id>/reopen` — failed -> uploading (in-place retry,
+  behaelt `card_uuid` + gestagte Chunks). **Nachgeruestet auf dem Slice-2-
+  Branch, noch nicht in PR #16** — beim #16-Merge mitnehmen (siehe §3).
 * `GET  /api/upload/status` — Polling fuer UI
 
 Der Client baut **ausschliesslich** gegen diese Endpoints. Neue Endpoints
