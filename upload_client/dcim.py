@@ -2,7 +2,8 @@
 
 Operator requirement (2026-06-02): camera clocks are frequently wrong, so
 *absolute* dates are meaningless. What matters is the **relative spacing**
-of the DCIM sub-folders' creation dates:
+of the DCIM sub-folders' dates (the "Aenderungsdatum" / mtime, which is
+the reliable recording timestamp - see ``_default_created``):
 
 * All sub-folders within a few days of each other (even several, e.g.
   after a card swap) -> one recording, ingest everything.
@@ -33,13 +34,15 @@ VIDEO_SUFFIXES = (".mp4",)
 # Sub-folder clusters more than this far apart trigger the stale alarm.
 DEFAULT_MAX_GAP = timedelta(days=3)
 
-# Returns a folder's creation datetime. Default uses st_ctime, which on
-# Windows (where the operator runs the tool) is the real creation time.
+# Returns a folder's date. Default uses st_mtime (the "Aenderungsdatum"
+# shown in Explorer): it reflects when the camera last wrote the folder and
+# - unlike the creation time - survives copying / re-labelling the card,
+# so it is the reliable recording timestamp for the spread check.
 CreatedFn = Callable[[Path], datetime]
 
 
 def _default_created(path: Path) -> datetime:
-    return datetime.fromtimestamp(path.stat().st_ctime)
+    return datetime.fromtimestamp(path.stat().st_mtime)
 
 
 @dataclass(frozen=True)

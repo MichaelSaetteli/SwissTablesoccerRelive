@@ -49,8 +49,11 @@ flach in einen `ETxx`-Ordner gezogen und in Walk-Reihenfolge gemerged
 Da absolute Datumswerte unzuverlaessig sind, zaehlt nur der **relative
 Abstand** der DCIM-Unterordner:
 
-* Pro Unterordner das **Erstelldatum** (unter Windows zuverlaessig) lesen
-  und anzeigen.
+* Pro Unterordner das **Aenderungsdatum** (mtime, das im Explorer
+  sichtbare Datum) lesen und anzeigen. Das Erstelldatum (ctime) wird beim
+  Umbenennen/Kopieren der Karte auf "heute" zurueckgesetzt und ist daher
+  unbrauchbar (Befund aus dem Windows-Test 2026-06-02); mtime ueberlebt das
+  und ist der echte Aufnahme-Zeitpunkt.
 * Unterordner nach Datum sortieren und in Cluster gruppieren. Ein neuer
   Cluster beginnt, wenn der Abstand **mehr als 3 Tage** betraegt.
 * **Mehr als ein Cluster → ⚠ Alarm** (vermutlich alte Aufnahme dabei).

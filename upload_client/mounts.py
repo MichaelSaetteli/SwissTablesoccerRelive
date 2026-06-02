@@ -30,14 +30,37 @@ def discover_card_roots() -> List[Path]:
     return _posix_roots()
 
 
+_DRIVE_REMOVABLE = 2  # Win32 DRIVE_REMOVABLE
+
+
 def _windows_roots() -> List[Path]:
     roots: List[Path] = []
     # Skip A:/B: (legacy floppy) and C: (system); enumerate the rest.
     for letter in string.ascii_uppercase[3:]:
         drive = Path(f"{letter}:\\")
-        if drive.exists():
+        if drive.exists() and _is_card_drive(drive):
             roots.append(drive)
     return roots
+
+
+def _is_card_drive(drive: Path) -> bool:
+    """Keep removable media (and any drive with a DCIM/), hide internal disks.
+
+    Operators plug cards into a reader (removable). Internal/attached fixed
+    disks (e.g. a `HDD12TB` data volume) would otherwise show up as locked
+    rows. A drive that carries a ``DCIM/`` is always kept - that covers card
+    readers which report as 'fixed'. Fails open (keeps the drive) so a real
+    card is never hidden by a probing error.
+    """
+    try:
+        if (drive / "DCIM").is_dir():
+            return True
+        import ctypes
+        return ctypes.windll.kernel32.GetDriveTypeW(  # type: ignore[attr-defined]
+            str(drive)
+        ) == _DRIVE_REMOVABLE
+    except Exception:  # noqa: BLE001 - never hide a card on a probe error
+        return True
 
 
 def _posix_roots() -> List[Path]:
