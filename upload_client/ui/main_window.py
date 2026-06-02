@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from upload_client.upload_engine import CLIENT_VERIFIED
+from upload_client.upload_engine import CLIENT_INTERRUPTED, CLIENT_VERIFIED
 
 # columns
 _COL_SEL, _COL_TABLE, _COL_DISC, _COL_STATE, _COL_DETAIL, _COL_REMOVE = range(6)
@@ -48,13 +48,16 @@ class MainWindow(QMainWindow):
         manager,
         *,
         scan_fn: Callable[[], Dict[str, object]],
+        watcher=None,
         tournament_name: str = "",
+        resume_hint: int = 0,
         poll_ms: int = _POLL_MS,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._manager = manager
         self._scan_fn = scan_fn
+        self._watcher = watcher
         self._row_of: Dict[str, int] = {}  # card key -> table row index
 
         title = "STS-Upload"
@@ -63,10 +66,17 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(title)
         self._build_ui()
 
+        if resume_hint > 0:
+            self.lbl_hint.setText(
+                f"{resume_hint} Karte(n) aus einer frueheren Sitzung - "
+                f"einstecken und 'Hochladen starten' zum Fortsetzen."
+            )
+            self.lbl_hint.setVisible(True)
+
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self.refresh)
+        self._timer.timeout.connect(self._tick)
         self._timer.start(poll_ms)
-        self.refresh()
+        self._tick()
 
     # -- construction ------------------------------------------------------
 
@@ -89,6 +99,22 @@ class MainWindow(QMainWindow):
 
         self.chk_auto = QCheckBox("Auto-Release nach Verifikation (ueberspringt manuellen Klick)")
         root.addWidget(self.chk_auto)
+
+        self.lbl_hint = QLabel("")
+        self.lbl_hint.setTextFormat(Qt.PlainText)
+        self.lbl_hint.setStyleSheet("color: #1a73e8;")
+        self.lbl_hint.setVisible(False)
+        root.addWidget(self.lbl_hint)
+
+        self.lbl_warn = QLabel("")
+        self.lbl_warn.setTextFormat(Qt.PlainText)
+        self.lbl_warn.setStyleSheet(
+            "color: #b00020; font-weight: bold; "
+            "background: #fde7e9; padding: 6px; border-radius: 4px;"
+        )
+        self.lbl_warn.setWordWrap(True)
+        self.lbl_warn.setVisible(False)
+        root.addWidget(self.lbl_warn)
 
         self.lbl_summary = QLabel("")
         self.lbl_summary.setTextFormat(Qt.PlainText)
@@ -129,6 +155,7 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def on_start(self) -> None:
+        self.lbl_hint.setVisible(False)
         self._manager.start_all(auto_release=self.chk_auto.isChecked())
         self.refresh()
 
@@ -158,6 +185,19 @@ class MainWindow(QMainWindow):
 
     # -- rendering ---------------------------------------------------------
 
+    def _tick(self) -> None:
+        """Timer step: poll mounts (if watching), then render."""
+        if self._watcher is not None:
+            change = self._watcher.poll()
+            if change.removed:
+                self._manager.handle_removed(change.removed)
+            if change.changed:
+                try:
+                    self._manager.add_scanned(self._scan_fn())
+                except Exception:  # noqa: BLE001 - never crash the poll loop
+                    pass
+        self.refresh()
+
     def refresh(self) -> None:
         snap = self._manager.snapshot()
         for row in snap.rows:
@@ -166,6 +206,18 @@ class MainWindow(QMainWindow):
         self.lbl_summary.setText(
             "\n".join(s.header_text() for s in snap.summaries)
         )
+
+        interrupted = [r.table for r in snap.rows if r.state == CLIENT_INTERRUPTED]
+        if interrupted:
+            self.lbl_warn.setText(
+                "⚠ Karte(n) " + ", ".join(sorted(interrupted))
+                + " entfernt / unterbrochen - bitte wieder einstecken; "
+                "der Upload wird fortgesetzt."
+            )
+            self.lbl_warn.setVisible(True)
+        else:
+            self.lbl_warn.setVisible(False)
+
         if snap.all_done:
             self.lbl_success.setText(
                 "✅ Alle erwarteten Karten freigegeben - Pipeline laeuft."

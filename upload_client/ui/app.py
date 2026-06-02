@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from upload_client.api_client import ApiError
 from upload_client.card_scanner import scan_card
 from upload_client.marker import MarkerError, has_marker, read_marker
+from upload_client.mount_watcher import MountWatcher
 from upload_client.mounts import discover_card_roots
 from upload_client.state_store import StateStore
 from upload_client.ui.login_dialog import LoginDialog
@@ -79,9 +80,14 @@ def run(argv=None) -> int:
     expected, active_ids, name = _expected_and_name(active)
     engine = UploadEngine(api, StateStore(STATE_FILE))
     manager = UploadManager(engine, max_parallel=4, expected=expected)
+    resume_hint = len(engine.resumable())
 
     window = MainWindow(
-        manager, scan_fn=_make_scan_fn(active_ids), tournament_name=name,
+        manager,
+        scan_fn=_make_scan_fn(active_ids),
+        watcher=MountWatcher(),
+        tournament_name=name,
+        resume_hint=resume_hint,
     )
     window.resize(900, 600)
     window.show()

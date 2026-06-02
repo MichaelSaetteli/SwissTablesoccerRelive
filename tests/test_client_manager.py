@@ -128,6 +128,55 @@ def test_locked_card_shown_but_not_uploaded(env, tmp_path: Path) -> None:
     assert locked[0].can_release is False
 
 
+def _seed_progress(store: StateStore, uuid: str, table: str, state: str) -> None:
+    from upload_client.upload_engine import CardProgress
+    p = CardProgress(card_uuid=uuid, table=table, discipline="Einzel",
+                     tournament_id=1, expected_files=2, expected_bytes=200)
+    p.state = state
+    p.server_card_id = 1
+    store.put(uuid, p.to_dict())
+
+
+def test_mark_interrupted_only_flips_uploading(tmp_path: Path) -> None:
+    from tests.client_helpers import FakeSession
+    from upload_client.upload_engine import (
+        CLIENT_INTERRUPTED, CLIENT_UPLOADING, CLIENT_VERIFIED,
+    )
+    store = StateStore(tmp_path / "s.json")
+    _seed_progress(store, "up", "ET01", CLIENT_UPLOADING)
+    _seed_progress(store, "ok", "ET02", CLIENT_VERIFIED)
+    engine = UploadEngine(ApiClient("http://x", session=FakeSession()), store)
+
+    assert engine.mark_interrupted("up").state == CLIENT_INTERRUPTED
+    assert engine.mark_interrupted("ok").state == CLIENT_VERIFIED  # unchanged
+    assert engine.mark_interrupted("missing") is None
+
+
+def test_manager_handle_removed_interrupts_uploading_card(tmp_path: Path) -> None:
+    from tests.client_helpers import FakeSession
+    from upload_client.card_scanner import CARD_READY, ScannedCard
+    from upload_client.manifest import CardManifest
+    from upload_client.marker import CardMarker
+    from upload_client.upload_engine import CLIENT_INTERRUPTED, CLIENT_UPLOADING
+
+    store = StateStore(tmp_path / "s.json")
+    _seed_progress(store, "u1", "ET01", CLIENT_UPLOADING)
+    engine = UploadEngine(ApiClient("http://x", session=FakeSession()), store)
+    mgr = UploadManager(engine, max_parallel=1)
+
+    root = tmp_path / "card"
+    marker = CardMarker("u1", 1, "T", "Einzel", "ET01")
+    scanned = ScannedCard(root=root, status=CARD_READY, marker=marker,
+                          manifest=CardManifest(root=root, files=()))
+    mgr.add_scanned({scanned.key: scanned})
+
+    affected = mgr.handle_removed([root])
+    assert affected == ["ET01"]
+    assert engine.load("u1").state == CLIENT_INTERRUPTED
+    # A different root removal does nothing.
+    assert mgr.handle_removed([tmp_path / "other"]) == []
+
+
 def test_statestore_parallel_writes_are_safe(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.json")
 

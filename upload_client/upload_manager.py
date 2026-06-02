@@ -19,6 +19,7 @@ from __future__ import annotations
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from upload_client.card_scanner import CARD_READY, ScannedCard
@@ -31,6 +32,7 @@ from upload_client.presentation import (
 )
 from upload_client.upload_engine import (
     CLIENT_PENDING,
+    CLIENT_UPLOADING,
     CLIENT_VERIFIED,
     CardProgress,
     UploadEngine,
@@ -129,6 +131,27 @@ class UploadManager:
 
     def cancel(self, card_uuid: str) -> Optional[CardProgress]:
         return self._engine.cancel(card_uuid)
+
+    def handle_removed(self, roots) -> List[str]:
+        """A card was physically removed: flip any uploading one to interrupted.
+
+        Returns the table names that were actually interrupted (were
+        uploading) so the GUI can name them in the warning.
+        """
+        rootset = {str(Path(r)) for r in roots}
+        affected: List[str] = []
+        with self._lock:
+            cards = list(self._tracked.values())
+        for card in cards:
+            if card.marker is None or card.root is None:
+                continue
+            if str(card.root) not in rootset:
+                continue
+            current = self._engine.load(card.marker.card_uuid)
+            if current is not None and current.state == CLIENT_UPLOADING:
+                self._engine.mark_interrupted(card.marker.card_uuid)
+                affected.append(card.marker.table)
+        return affected
 
     # -- read model --------------------------------------------------------
 

@@ -146,6 +146,20 @@ class UploadEngine:
                 out.append(p)
         return out
 
+    def mark_interrupted(self, card_uuid: str) -> Optional[CardProgress]:
+        """Client-local uploading -> interrupted (card physically removed).
+
+        Only flips a card that is currently ``uploading``; the server row
+        stays ``uploading`` (interrupted is a client concept). Resuming
+        later re-sends the remaining files against the same card.
+        """
+        p = self.load(card_uuid)
+        if p is None or p.state != CLIENT_UPLOADING:
+            return p
+        p.state = CLIENT_INTERRUPTED
+        self._save(p, "interrupted")
+        return p
+
     def upload(
         self,
         marker: CardMarker,

@@ -63,6 +63,22 @@ class StubManager:
     def shutdown(self, *, wait=True) -> None:
         self.calls.append(("shutdown", wait))
 
+    def handle_removed(self, roots) -> list:
+        self.calls.append(("handle_removed", list(roots)))
+        return []
+
+
+class StubWatcher:
+    """Returns scripted MountChange values, then steady state."""
+
+    def __init__(self, scripted) -> None:
+        from upload_client.mount_watcher import MountChange
+        self._queue = list(scripted)
+        self._steady = MountChange(inserted=[], removed=[])
+
+    def poll(self):
+        return self._queue.pop(0) if self._queue else self._steady
+
 
 def _row(key, table, state, **kw) -> CardRow:
     base = dict(
@@ -154,6 +170,35 @@ def test_make_scan_fn_locks_wrong_tournament(qapp, tmp_path, monkeypatch):
     by_table = {c.marker.table: c.status for c in inv.values()}
     assert by_table["ET05"] == CARD_WRONG_TOURNAMENT
     assert by_table["ET06"] == CARD_READY
+
+
+def test_interrupted_card_shows_red_warning(qapp):
+    from upload_client.upload_engine import CLIENT_INTERRUPTED
+    rows = [_row("u1", "ET03", CLIENT_INTERRUPTED, is_error=False)]
+    win = MainWindow(StubManager(_snapshot(rows)), scan_fn=lambda: {},
+                     poll_ms=10_000)
+    assert win.lbl_warn.isHidden() is False
+    assert "ET03" in win.lbl_warn.text()
+
+
+def test_tick_polls_watcher_and_handles_removal(qapp):
+    from upload_client.mount_watcher import MountChange
+    mgr = StubManager(_snapshot([_row("u1", "ET01", CLIENT_VERIFIED)]))
+    watcher = StubWatcher([MountChange(inserted=[], removed=["/mnt/card"])])
+    win = MainWindow(mgr, scan_fn=lambda: {"k": object()}, watcher=watcher,
+                     poll_ms=10_000)
+    # __init__ ran one _tick already, which polled the scripted removal.
+    assert any(c[0] == "handle_removed" for c in mgr.calls)
+    assert any(c[0] == "add" for c in mgr.calls)  # re-scan on change
+
+
+def test_resume_hint_shown_and_cleared_on_start(qapp):
+    mgr = StubManager(_snapshot([_row("u1", "ET01", CLIENT_VERIFIED)]))
+    win = MainWindow(mgr, scan_fn=lambda: {}, resume_hint=3, poll_ms=10_000)
+    assert win.lbl_hint.isHidden() is False
+    assert "3" in win.lbl_hint.text()
+    win.on_start()
+    assert win.lbl_hint.isHidden() is True
 
 
 def test_success_banner_when_all_done(qapp):

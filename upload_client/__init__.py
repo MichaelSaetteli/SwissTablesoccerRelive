@@ -40,6 +40,7 @@ from upload_client.manifest import (
     FileEntry,
     build_manifest,
 )
+from upload_client.mount_watcher import MountChange, MountWatcher
 from upload_client.marker import (
     MARKER_NAME,
     CardMarker,
@@ -80,6 +81,8 @@ __all__ = [
     "ScannedCard",
     "scan_mounts",
     "merge_scans",
+    "MountWatcher",
+    "MountChange",
     "CARD_READY",
     "CARD_NO_MARKER",
     "CARD_WRONG_TOURNAMENT",
