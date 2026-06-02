@@ -1,5 +1,14 @@
 # CLAUDE.md — SwissTablesoccerRelive
 
+## ⚠️ Für neue Claude-Sessions: bitte zuerst lesen
+
+1. [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) — aktueller Stand, offene PRs, was als nächstes ansteht, Mistakes-not-to-repeat
+2. [`docs/INVARIANTS.md`](docs/INVARIANTS.md) — Regeln die NICHT zur Diskussion stehen (Volume-Layout, Privacy-Default, Stream-Copy, ETxx-Konvention)
+
+Danach erst loslegen — sonst werden Reibungspunkte aus früheren Sessions wiederholt (es gibt eine konkrete Liste in SESSION_HANDOFF §7).
+
+---
+
 ## Projektübersicht
 
 Swiss Tischfussball Relive-Plattform: halbautomatische Pipeline für
