@@ -97,6 +97,102 @@ Issue #15; hier die Headline:
 
 Realistisch **1.5–2 Wochen fokussierte Arbeit** fuer Slice 2.
 
+## 6a. Slice 2 — Settled Requirements (nicht mehr diskutieren)
+
+Diese Punkte sind mit dem Operator durchgesprochen und entschieden. Eine
+neue Session, die anfaengt sie zu hinterfragen, verbrennt Operator-Zeit.
+Wenn etwas davon sich aendern muss, ist das ein expliziter Operator-
+Beschluss in dieser Datei UND in Issue #15 — nicht eine Diskussion im
+Chat. Default-Antwort auf „sollen wir nicht doch X tun?": **nein, das ist
+gesetzt.**
+
+### Operator-Workflow
+
+* **Hoechstens 3 Klicks** vom „Karten eingesteckt" bis „alle Uploads
+  released": (1) „SD-Karten einlesen", (2) „Hochladen starten",
+  (3) „Freigeben". Mit Auto-Release sind's nur 2.
+* **Operator hat KEINE Eingabe-Felder** ausser den Klicks und der
+  Auto-Release-Checkbox. Kein Pfad, kein Tisch, kein Turnier zur Auswahl.
+* **Aktives Turnier ist auto-discovered** ueber `/api/upload/active-tournament`.
+  Es gibt immer genau eines aktives Turnier — nie mehrere zur Auswahl
+  stellen.
+* **Tisch und Disziplin kommen aus dem Marker** (`.sts-card.json`), nie
+  aus operator-Eingabe.
+* **Variable Karten-Anzahl**: bis zu 30 pro Disziplin (Einzel + Doppel
+  = bis zu 60 pro Turnier). UI muss auch mit 60 Zeilen lesbar bleiben.
+* **Variable Reader-Parallelitaet**: 1-Slot bis 24-Slot. Tool muss
+  beides gleich gut handhaben — additiver Scan (Re-Scan fuegt Karten
+  hinzu, resettet NICHT bereits geladene).
+
+### Per-Karten-Workflow
+
+* **Freigabe ist separat vom Upload** (entkoppelt). Operator kann
+  einzelne Karten oder Batches freigeben.
+* **Auto-Release**-Option pro Tool-Session (nicht pro Karte), als
+  Checkbox im UI, **Default off**. Wenn aktiv: nach `verified` direkt
+  nach `released`.
+* **„Alle verifizierten freigeben"** als einzelner Klick verfuegbar
+  (Convenience fuer die Operatoren, die alle Karten prueffen wollen
+  bevor sie alles auf einmal triggern).
+
+### Hardware-State-Patterns (Safety-Layer)
+
+Diese UX-Patterns sind explizit als **Schutzschicht gegen Handlings-
+fehler** entschieden, nicht „nice to have":
+
+| Pattern | Verhalten |
+|---|---|
+| Safe-to-remove-Indikator | `🔌 sicher entfernbar` erscheint **nur** wenn State in {`verified`, `released`}. Sonst `⛔ Nicht entfernen — Upload laeuft` |
+| Mount/unmount-Awareness | Karte entfernt waehrend `uploading` → State `interrupted` + grosse rote Warnung + Recovery-Hinweis. Bei Re-Insertion automatisch resumen, nicht restarten |
+| Defensive Buttons | „Freigeben"-Button disabled solange Karte in `uploading`. Tooltip erklaert warum |
+| Resumability | Lokales State-File. Tool-Crash → beim Neustart „14 Karten waren in Upload, fortsetzen?" |
+| Marker-Mismatch-Schutz | Karte mit Marker eines anderen/alten Turniers → angezeigt aber gesperrt, mit Erklaerung |
+| Doppel-Scan-Robustheit | Mehrfach-Klick auf „Einlesen" → additiver Scan, keine Duplikate, kein State-Reset |
+| Abschluss-Klarheit | Wenn alle erwarteten Karten released → grosser gruener Success-State |
+| Fehlersprache verstaendlich | „Karte ET05: Uebertragungsfehler. Bitte erneut hochladen." statt SHA-256 mismatch chunk 47/812 (Details via Aufklapper) |
+
+### Architektur-Entscheidungen
+
+* **Stack**: Python + PySide6 (NICHT Tauri, NICHT Electron). Begruendung:
+  kleines Binary, kein Browser-Wrapper, vertrauter Stack fuer das Server-
+  Team. Wer Tauri/Electron diskutieren will: bitte hier zuerst aendern.
+* **Transport**: HTTP-Multipart ueber die bestehende Flask-App (NICHT
+  SFTP, NICHT WebDAV). Endpoints stehen bereits.
+* **Verifikation MVP**: File-Count + Total-Bytes. **Kein SHA-256** im
+  MVP (verdoppelt SD-Karten-I/O). Spaeter optional.
+* **Marker-Datei**: `.sts-card.json` im Karten-Root. Karten ohne Marker
+  werden im UI angezeigt aber gesperrt — niemals stillschweigend
+  ignorieren oder vom Operator beschriften lassen (das ist Admin-Aufgabe
+  vor dem Turnier).
+* **Tournament-Discovery**: ueber `/api/upload/active-tournament`. Tool
+  kennt KEINE Tournament-IDs aus eigenem Wissen.
+* **Plattform-MVP**: Windows. macOS/Linux nach Bedarf spaeter.
+* **Auto-Update**: nicht im MVP. Admin verteilt neue Versionen pro
+  Turnier.
+
+### Was bewusst NICHT zum MVP gehoert
+
+* SHA-256-Verifikation (verdoppelt SD-I/O — spaeter wenn Production
+  zeigt dass es noetig ist)
+* Auto-Update-Mechanismus
+* macOS-/Linux-Builds
+* Multi-Tournament-Auswahl (es gibt immer genau eins aktives)
+* Operator-Felder zum „Tisch manuell zuweisen" (immer Marker-basiert)
+* Karten ohne Marker silent hochladen (mit Hinweis, aber nicht hochladbar)
+
+### Was die Server-Seite bereits liefert (siehe `docs/UPLOAD_CLIENT_HOWTO.md`)
+
+* `GET  /api/upload/active-tournament` — Discovery
+* `POST /api/upload/start` — Reserve staging + DB-Row
+* `POST /api/upload/<id>/chunk` — Multipart, ein File pro Call
+* `POST /api/upload/<id>/finish` — Manifest-Verify, optional Auto-Release
+* `POST /api/upload/release` — atomic rename, single oder batch
+* `POST /api/upload/<id>/cancel`
+* `GET  /api/upload/status` — Polling fuer UI
+
+Der Client baut **ausschliesslich** gegen diese Endpoints. Neue Endpoints
+nur dann, wenn die UX hart blockiert ist und der Operator zustimmt.
+
 ## 7. Mistakes-not-to-repeat (Kontext fuer eine neue Claude-Session)
 
 Wenn du eine neue Session bist, lies das hier zuerst, sonst wiederholen
@@ -146,13 +242,24 @@ testen will:
 Empfohlener Prompt fuer den ersten Turn der neuen Session:
 
 > Ich starte eine neue Session fuer den Slice 2 von Issue #15
-> (PySide6-Client-Tool). Lies in dieser Reihenfolge: `docs/INVARIANTS.md`,
-> `docs/SESSION_HANDOFF.md`, Issue #15. Wenn alles klar ist, schlag mir
-> einen Plan fuer den ersten konkreten Arbeitsblock vor. Server-Vertrag
-> steht bereits — du baust gegen die Endpoints aus `docs/UPLOAD_CLIENT_HOWTO.md`.
+> (PySide6-Client-Tool). Lies in dieser Reihenfolge:
+> `docs/SESSION_HANDOFF.md` (inklusive §6 + §6a — die Slice-2-Settled-
+> Requirements sind NICHT mehr zu diskutieren), `docs/INVARIANTS.md`,
+> `docs/UPLOAD_CLIENT_HOWTO.md` (Server-Vertrag), Issue #15. Wenn alles
+> klar ist, schlag mir einen Plan fuer den ersten konkreten Arbeitsblock
+> vor — basierend auf dem in §6a Festgelegten, nicht „lass uns kurz die
+> Architektur durchgehen". Der Server-Vertrag steht, du baust gegen die
+> Endpoints.
 
-Damit ist sie in ~3 Datei-Reads voll im Kontext und kann fokussiert
-starten.
+Damit ist sie in ~4 Datei-Reads voll im Kontext und kann fokussiert
+starten — **ohne** den langen Architektur-Discovery-Loop nochmal zu fahren.
+
+**Wichtige Default-Antwort fuer die neue Session:** Wenn der Operator
+beilaeufig sagt „sollen wir nicht X tun?" und X in §6a anders entschieden
+ist, **darfst du NICHT zustimmen** — sondern auf §6a verweisen und
+explizit fragen, ob er die Entscheidung kippen will. Dann erst aendern.
+Sonst entsteht genau das Problem, das §6a verhindern soll: gleiche
+Diskussionen aus alten Sessions wiederholen.
 
 ## 10. Bevorzugte Arbeitsweise des Operators
 
