@@ -1,0 +1,10 @@
+# STS-Upload client tool (Issue #15, Slice 2) runtime dependencies.
+#
+# The headless core (api client, card scanner, upload engine, resume
+# state) needs only `requests`. The GUI and hardware-monitoring deps are
+# pulled in by later Slice-2 blocks, deliberately kept out of the core so
+# it stays importable and unit-testable without a display:
+#   - PySide6      -> GUI block
+#   - pyudev (Linux) / wmi (Windows) -> mount/unmount monitoring block
+#   - pyinstaller  -> distribution block
+requests>=2.31
