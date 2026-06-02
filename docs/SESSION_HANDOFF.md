@@ -128,6 +128,34 @@ Beschluss in dieser Datei UND in Issue #15 — nicht eine Diskussion im
 Chat. Default-Antwort auf „sollen wir nicht doch X tun?": **nein, das ist
 gesetzt.**
 
+### ⚠ Revision 2026-06-02 — Einlese-Modell geaendert (Operator-Beschluss)
+
+Nach einem realen Durchgang mit dem Operator wurde das **marker-basierte
+Einlese-Modell bewusst revidiert**. Vollstaendige Spezifikation +
+Begruendung: [`UPLOAD_CLIENT_INGEST.md`](UPLOAD_CLIENT_INGEST.md). Kurz:
+
+* **Tisch kommt aus dem Windows-Datentraegernamen** der Karte
+  (`E01` → `ET01`), nicht mehr aus dem Marker. Der Name ist karten-intern
+  und slot-unabhaengig.
+* **Disziplin waehlt der Operator** als Batch-Default (pro Karte
+  korrigierbar) — gegen die real vorgekommene Einzel/Doppel-Vertauschung.
+  Damit ist „Tisch und Disziplin nur aus dem Marker" (unten) **aufgehoben**;
+  ein `.sts-card.json`-Marker ist **nicht mehr noetig** (falls vorhanden:
+  nur Vorbelegung). „Marker-Mismatch-Schutz" / „Karten ohne Marker gesperrt"
+  sind damit **obsolet**.
+* **Nur `.mp4`** wird hochgeladen; Kamera-Housekeeping (`BACKUP.HST`,
+  `INDEX.DAT` …) ignoriert.
+* **DCIM-Datums-Alarm**: liegen die Aufnahme-Unterordner **> 3 Tage**
+  auseinander, wird gewarnt; Default = neuester Cluster an, aeltere aus,
+  Operator entscheidet (alte-Daten-Schutz; Kamera-Uhren sind absolut
+  unzuverlaessig, nur der relative Abstand zaehlt).
+* **Server-Vertrag unveraendert.** Umsetzung: `card_identity`, `dcim`,
+  `mounts` (Volume-Info), `manifest` (.mp4-Whitelist + Subdir-Auswahl),
+  `card_scanner` (synthetischer Marker), GUI (Batch-Disziplin + Datum/Alarm).
+
+Die folgenden Original-Punkte bleiben als Historie stehen, gelten aber nur
+soweit sie der Revision nicht widersprechen.
+
 ### Operator-Workflow
 
 * **Hoechstens 3 Klicks** vom „Karten eingesteckt" bis „alle Uploads

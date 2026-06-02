@@ -1,28 +1,34 @@
 # STS-Upload — Anleitung fuer Operatoren
 
 Das **STS-Upload**-Tool laedt die SD-Karten eines Turniers auf die NAS.
-Es ist so gebaut, dass man **nichts falsch machen kann**: du gibst keine
-Pfade, keine Tischnummern und kein Turnier ein — das Tool liest alles von
-der Karte. Du klickst nur.
+Du gibst keine Pfade und keine Tischnummern ein — der Tisch kommt aus dem
+**Namen der Karte** (`E01` → Tisch 1). Du waehlst nur die Disziplin und
+klickst.
 
 ## Voraussetzung
 
-Die SD-Karten sind vom Admin **vor dem Turnier beschriftet** worden (jede
-Karte traegt eine kleine Markierungsdatei mit Tisch + Disziplin). Karten
-ohne Markierung zeigt das Tool an, kann sie aber **nicht** hochladen —
-melde solche Karten dem Admin.
+Die SD-Karten tragen einen **Datentraegernamen** wie `E01`, `E02` …
+(Einzel) bzw. `D01`, `D02` … (Doppel) — daraus liest das Tool die
+Tischnummer. Eine Karte ohne Nummer im Namen zeigt das Tool gesperrt an;
+melde sie dem Admin (Karte umbenennen).
 
-## Der Ablauf in 3 Klicks
+## Der Ablauf
 
-1. **Karten einstecken** — eine oder mehrere (bis 24 gleichzeitig, je nach
+1. **Disziplin waehlen** — oben „Einzel" oder „Doppel" einstellen, je
+   nachdem welchen Schwung Karten du gerade einliest. (Schuetzt davor, dass
+   Einzel-Karten versehentlich als Doppel landen.)
+2. **Karten einstecken** — eine oder mehrere (bis 24 gleichzeitig, je nach
    Reader). Du kannst jederzeit weitere nachstecken.
-2. **Klick 1 — „SD-Karten einlesen"** — das Tool findet die Karten, liest
-   die Markierung und zeigt jede Karte als Zeile. (Das passiert auch
-   automatisch, wenn du eine Karte einsteckst.)
-3. **Klick 2 — „Hochladen starten"** — alle bereiten Karten werden parallel
+3. **Klick „SD-Karten einlesen"** — das Tool findet die Karten und zeigt
+   jede als Zeile (Tisch, Disziplin, Datum). Passiert auch automatisch beim
+   Einstecken.
+4. **Klick „Hochladen starten"** — alle bereiten Karten werden parallel
    hochgeladen und geprueft.
-4. **Klick 3 — „Alle verifizierten freigeben"** — gibt die fertig
-   geprueften Karten frei; ab da laeuft die Pipeline auf der NAS.
+5. **Klick „Alle verifizierten freigeben"** — gibt die fertig geprueften
+   Karten frei; ab da laeuft die Pipeline auf der NAS.
+
+> **Eine Karte gehoert zur anderen Disziplin?** Stell ihre Disziplin in der
+> Zeile um — der Rest des Schwungs bleibt unveraendert.
 
 > **Nur 2 Klicks?** Setz das Hakchen **„Auto-Release nach Verifikation"**
 > oben. Dann wird jede Karte nach dem Pruefen automatisch freigegeben —
@@ -41,7 +47,8 @@ Einzelne Karten freigeben: Hakchen in der Zeile setzen und unten
 | ✅ released | fertig | Freigegeben, Pipeline laeuft |
 | ⚠ Fehler | Problem | Uebertragung unvollstaendig — siehe unten |
 | ⛔ unterbrochen | pausiert | Karte wurde entfernt — wieder einstecken |
-| 🔒 gesperrt | gesperrt | Karte ohne Markierung oder falsches Turnier |
+| 🔒 gesperrt | gesperrt | Kartenname ohne Tischnummer, oder kein aktives Turnier |
+| ⚠ (Datum-Spalte) | Achtung | Aufnahme-Ordner liegen **mehr als 3 Tage** auseinander — evtl. alte Daten drauf. Zeile gelb. Pruefen, welche Ordner eingelesen werden sollen (Default: die neuesten). |
 
 **Entfernen-Spalte:**
 * **🔌 sicher entfernbar** — die Karte darf raus (verifiziert oder

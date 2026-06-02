@@ -49,30 +49,30 @@ Das Tool fragt beim Start `GET /api/upload/active-tournament` ab und kennt
 damit Name + erwartete Anzahl automatisch — der Operator waehlt **nie** ein
 Turnier aus.
 
-## 2. SD-Karten beschriften
+## 2. SD-Karten benennen (einmalig)
 
-Jede Karte bekommt eine Markierungsdatei `.sts-card.json` im Karten-Root.
-Sie ist die **Quelle der Wahrheit** fuer Tisch + Disziplin + Turnier — der
-Operator kann das nicht uebersteuern.
+> **Geaendert 2026-06-02:** Es ist **kein** `.sts-card.json`-Marker pro Karte
+> mehr noetig. Der Tisch kommt aus dem **Datentraegernamen** der Karte, die
+> Disziplin waehlt der Operator beim Einlesen. Vollstaendige Begruendung:
+> [`UPLOAD_CLIENT_INGEST.md`](UPLOAD_CLIENT_INGEST.md).
 
-```bash
-python -m scripts.prepare_card \
-    --card /pfad/zur/sdkarte \
-    --tournament-id <id> \
-    --tournament-name "Seetal 2026 STS2" \
-    --discipline Einzel \
-    --table ET01
-```
+Gib jeder Karte **einmalig** einen Datentraegernamen mit der Tischnummer:
 
-* `--table` ist immer `ET` + zweistellige Tischnummer (`ET01` … `ET30`),
-  Grossschreibung wird normalisiert.
-* `--discipline` ist `Einzel` oder `Doppel`.
-* Pro Karte einmal ausfuehren. Eine bestehende Markierung wird nicht
-  ueberschrieben (Schutz gegen versehentliches Umbenennen) — `--force`
-  erzwingt es.
+* Einzel-Tische: `E01`, `E02`, … `E30`
+* Doppel-Tische: `D01`, `D02`, … `D30`
 
-Tipp: Die Karten in Reihenfolge beschriften und physisch beschriften
-(Etikett), damit sie nach dem Turnier wieder zugeordnet werden koennen.
+Unter Windows: Explorer → Rechtsklick auf das Laufwerk → **Umbenennen** (oder
+in den Eigenschaften das Namensfeld). Der Name gehoert zur Karte, nicht zum
+Laufwerksbuchstaben — dieselbe Karte heisst in jedem Slot gleich.
+
+* Das Tool liest die Ziffern aus dem Namen (`E01` → Tisch `ET01`); der
+  Buchstabe `E`/`D` ist nur ein Vorschlag fuer die Disziplin — massgebend
+  ist die Batch-Auswahl des Operators (pro Karte korrigierbar).
+* Karten mit Nummer im Namen koennen wiederverwendet werden; alte Aufnahmen
+  auf der Karte fangen wir ueber den DCIM-Datums-Alarm ab (siehe Ingest-Doc).
+
+Das Legacy-Skript `scripts/prepare_card.py` (Marker schreiben) bleibt
+bestehen, ist fuer den neuen Ablauf aber **nicht mehr noetig**.
 
 ## 3. Tool bauen + verteilen
 
