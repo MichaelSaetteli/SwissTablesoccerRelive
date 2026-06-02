@@ -11,9 +11,11 @@ The server only knows ``uploading / verified / released / failed /
 cancelled``. ``interrupted`` is a *client-local* concept: the card row
 stays ``uploading`` on the server while the client pauses (card pulled /
 network gone). Resume = send the remaining files against the same
-``card_id`` and call ``finish``. No server endpoint moves a card back
-into ``uploading``, so a *failed* card is retried by cancelling it and
-starting a fresh server-side upload.
+``card_id`` and call ``finish``. A *failed* card (manifest mismatch) is
+retried in place via ``POST /api/upload/<id>/reopen`` (failed ->
+uploading): the ``card_uuid`` and the already-staged chunks are kept, the
+client re-sends and re-``finish``es. Only a server row that is genuinely
+``cancelled`` forces a fresh start under a new id.
 
 The engine is transport-agnostic (it talks only to ``ApiClient``) and has
 no GUI / threading concerns, so it is fully unit-testable against a fake
@@ -219,19 +221,12 @@ class UploadEngine:
         *,
         auto_release: bool = False,
     ) -> CardProgress:
-        """Retry a failed card: cancel the stale server row, upload fresh.
+        """Retry a failed card. Explicit alias for ``upload``.
 
-        The Slice-1 contract has no failed->uploading endpoint, so a fresh
-        server upload (new server uuid) is the clean recovery path.
+        ``upload`` already reopens a ``failed`` record in place (re-send +
+        finish) via the server's reopen endpoint, so retry is just the same
+        call - kept as a named entry point for the GUI's "Erneut hochladen".
         """
-        p = self.load(marker.card_uuid)
-        if p is not None and p.server_card_id is not None and p.state != CLIENT_RELEASED:
-            try:
-                self._api.cancel(p.server_card_id)
-            except ApiError:
-                pass  # already gone / not cancellable - proceed to fresh start
-        # Reset the local record so upload() does a clean start.
-        self._store.remove(marker.card_uuid)
         return self.upload(marker, manifest, auto_release=auto_release)
 
     # -- internals ---------------------------------------------------------
@@ -245,8 +240,14 @@ class UploadEngine:
         server row if our local record was lost, or starts a fresh upload.
         """
         if progress.server_card_id is not None:
-            if progress.state in (CLIENT_INTERRUPTED, CLIENT_FAILED):
-                progress.state = CLIENT_UPLOADING
+            if progress.state == CLIENT_FAILED:
+                # Reopen in place. The mismatch means staging is not what we
+                # think, so clear `sent` and re-send everything; the server
+                # overwrites and re-walks staging at finish.
+                card = self._api.reopen(progress.server_card_id)
+                self._apply_server_card(progress, card)
+                progress.sent = []
+            progress.state = CLIENT_UPLOADING
             return
 
         try:
@@ -308,8 +309,18 @@ class UploadEngine:
             self._save(progress, "started")
             return progress
 
-        # failed / cancelled / interrupted-on-server: cancel + fresh start.
         cid = existing.get("id")
+        if state == "failed" and cid is not None:
+            # Reopen in place rather than abandoning the staged chunks.
+            card = self._api.reopen(int(cid))
+            self._apply_server_card(progress, card)
+            progress.server_card_uuid = existing.get("card_uuid")
+            progress.sent = []
+            progress.state = CLIENT_UPLOADING
+            self._save(progress, "started")
+            return progress
+
+        # cancelled (terminal) or anything else: cancel + fresh start.
         if cid is not None:
             try:
                 self._api.cancel(int(cid))

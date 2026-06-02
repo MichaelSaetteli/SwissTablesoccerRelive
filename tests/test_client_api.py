@@ -98,6 +98,13 @@ def test_release_returns_released_list() -> None:
     assert s.calls[0]["json"] == {"card_ids": [7]}
 
 
+def test_reopen_posts_and_returns_card() -> None:
+    s = FakeSession().queue_resp(FakeResp(200, {"id": 7, "state": "uploading"}))
+    card = _api(s).reopen(7)
+    assert card["state"] == "uploading"
+    assert s.calls[0]["url"] == "http://server/api/upload/7/reopen"
+
+
 def test_status_filters_and_unwraps() -> None:
     s = FakeSession().queue_resp(FakeResp(200, {"cards": [{"id": 1}]}))
     out = _api(s).status(discipline="Einzel")

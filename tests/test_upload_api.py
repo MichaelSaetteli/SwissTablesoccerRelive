@@ -209,6 +209,39 @@ def test_manifest_mismatch_marks_failed_returns_422(client, tournament_id):
     assert "files" in body["error_message"]
 
 
+def test_reopen_failed_card_allows_retry_to_verify(client, tournament_id):
+    _login(client)
+    started = _start(
+        client, tournament_id=tournament_id,
+        expected_files=2, expected_bytes=200,
+    ).get_json()
+    card_id = started["id"]
+    _chunk(client, card_id, relative_name="v1.mp4", data=b"x" * 100)
+    assert client.post(f"/api/upload/{card_id}/finish").status_code == 422
+
+    reopened = client.post(f"/api/upload/{card_id}/reopen")
+    assert reopened.status_code == 200
+    body = reopened.get_json()
+    assert body["state"] == "uploading"
+    assert body["error_message"] is None  # error cleared on reopen
+
+    # Send the missing file and finish cleanly this time.
+    _chunk(client, card_id, relative_name="v2.mp4", data=b"y" * 100)
+    finished = client.post(f"/api/upload/{card_id}/finish").get_json()
+    assert finished["state"] == "verified"
+
+
+def test_reopen_non_failed_card_is_rejected(client, tournament_id):
+    _login(client)
+    started = _start(client, tournament_id=tournament_id,
+                     expected_files=1, expected_bytes=50).get_json()
+    card_id = started["id"]
+    _chunk(client, card_id, relative_name="v.mp4", data=b"x" * 50)
+    client.post(f"/api/upload/{card_id}/finish")  # -> verified
+    resp = client.post(f"/api/upload/{card_id}/reopen")
+    assert resp.status_code == 400
+
+
 def test_cancel_removes_staging(client, tournament_id, configs):
     _login(client)
     started = _start(client, tournament_id=tournament_id).get_json()

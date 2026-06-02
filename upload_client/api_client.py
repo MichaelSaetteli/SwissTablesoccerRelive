@@ -190,6 +190,13 @@ class ApiClient:
         data = self._expect(resp, what="Freigeben", codes=(200,))
         return list(data.get("released", []))
 
+    def reopen(self, card_id: int) -> Dict[str, Any]:
+        """Reopen a failed card (failed -> uploading) for an in-place retry."""
+        resp = self._session.post(
+            self._url(f"/api/upload/{card_id}/reopen"), timeout=self.timeout,
+        )
+        return self._expect(resp, what="Erneut oeffnen", codes=(200,))
+
     def cancel(self, card_id: int) -> Dict[str, Any]:
         """Wipe staging + mark cancelled."""
         resp = self._session.post(

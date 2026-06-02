@@ -61,9 +61,25 @@ def test_dcim_collisions_are_decollided_deterministically(tmp_path: Path) -> Non
     _touch(tmp_path / "DCIM" / "101PANA" / "S0001.mp4", b"y" * 5)
     names1 = [f.relative_name for f in build_manifest(tmp_path).files]
     names2 = [f.relative_name for f in build_manifest(tmp_path).files]
-    assert names1 == names2  # deterministic -> resume-safe
-    assert sorted(names1) == ["S0001.mp4", "S0001_2.mp4"]
-    assert len(set(names1)) == 2  # unique
+    assert names1 == names2          # deterministic -> resume-safe
+    assert len(set(names1)) == 2     # unique
+    assert names1 == sorted(names1)  # lexical sort == walk order (merge order)
+    assert all("/" not in n for n in names1)
+
+
+def test_flatten_preserves_walk_order_across_subfolders(tmp_path: Path) -> None:
+    # Two sessions; the merge must stay chronological: 100PANA before 101PANA.
+    _touch(tmp_path / "DCIM" / "100PANA" / "S0001.mp4", b"a")
+    _touch(tmp_path / "DCIM" / "100PANA" / "S0002.mp4", b"b")
+    _touch(tmp_path / "DCIM" / "101PANA" / "S0001.mp4", b"c")
+    files = build_manifest(tmp_path).files
+    # The lexical order of flat names must follow the walk order, so the
+    # original 100PANA files come before the 101PANA file after sorting.
+    ordered = [f.relative_name for f in files]
+    assert ordered == sorted(ordered)
+    # First file maps to 100PANA/S0001, last to 101PANA/S0001.
+    assert files[0].path.parent.name == "100PANA"
+    assert files[-1].path.parent.name == "101PANA"
 
 
 def test_no_flatten_keeps_relative_paths(tmp_path: Path) -> None:

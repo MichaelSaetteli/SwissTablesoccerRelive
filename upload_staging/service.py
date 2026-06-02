@@ -284,6 +284,31 @@ def release_many(
     return results
 
 
+def reopen_upload(
+    conn: sqlite3.Connection, card_id: int,
+) -> db_uploads.UploadCard:
+    """Reopen a failed card for another attempt: failed -> uploading.
+
+    A manifest mismatch leaves a card in ``failed`` with its staging dir
+    intact. The DB already allows failed -> uploading; exposing it lets the
+    client re-send the missing/bad files and call ``finish`` again WITHOUT
+    minting a new card_uuid or re-uploading what already arrived. The
+    transition clears the previous error message. Idempotent if the card is
+    already ``uploading``.
+    """
+    card = db_uploads.get_upload_card(conn, card_id)
+    if card is None:
+        raise UploadServiceError(f"upload card id={card_id} not found")
+    if card.state == db_uploads.STATE_UPLOADING:
+        return card
+    if card.state != db_uploads.STATE_FAILED:
+        raise UploadServiceError(
+            f"card id={card_id} is in state {card.state!r}; "
+            f"only 'failed' cards can be reopened"
+        )
+    return db_uploads.transition(conn, card_id, db_uploads.STATE_UPLOADING)
+
+
 def cancel_upload(
     conn: sqlite3.Connection, card_id: int,
 ) -> db_uploads.UploadCard:

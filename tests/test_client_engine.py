@@ -205,6 +205,64 @@ def test_manifest_mismatch_marks_failed(tmp_path: Path) -> None:
     assert "expected 1 files" in (progress.error or "")
 
 
+def test_failed_then_reopen_retry_verifies(tmp_path: Path) -> None:
+    # start ok -> chunk ok -> finish 422 (failed); retry: reopen -> chunk ->
+    # finish ok (verified). Scripted so the reopen path is deterministic.
+    card_root = make_card(tmp_path / "card", tournament_id=1,
+                          files={"v.mp4": b"x" * 10})
+    marker = read_marker(card_root)
+    manifest = build_manifest(card_root)
+
+    s = FakeSession().queue_resp(
+        FakeResp(201, {"id": 5, "state": "uploading",
+                       "staging_path": "/tmp/s", "card_uuid": marker.card_uuid}),
+        FakeResp(200, {"id": 5, "received_files": 1, "received_bytes": 10}),
+        FakeResp(422, {"id": 5, "state": "failed",
+                       "error_message": "expected 1 files, got 0"}),
+        FakeResp(200, {"id": 5, "state": "uploading",
+                       "staging_path": "/tmp/s", "card_uuid": marker.card_uuid}),
+        FakeResp(200, {"id": 5, "received_files": 1, "received_bytes": 10}),
+        FakeResp(200, {"id": 5, "state": "verified", "staging_path": "/tmp/s"}),
+    )
+    api = ApiClient("http://server", session=s)
+    engine = UploadEngine(api, StateStore(tmp_path / "state.json"))
+
+    first = engine.upload(marker, manifest, auto_release=False)
+    assert first.state == CLIENT_FAILED
+
+    second = engine.retry(marker, manifest, auto_release=False)
+    assert second.state == CLIENT_VERIFIED
+    assert any(c["url"].endswith("/reopen") for c in s.calls)
+
+
+def test_server_reopen_endpoint_failed_to_uploading(env, tmp_path: Path) -> None:
+    # Real server: drive a card to failed, then reopen + re-upload + verify.
+    card_root = make_card(tmp_path / "card", tournament_id=env["tid"],
+                          files={"v.mp4": b"x" * 10})
+    marker = read_marker(card_root)
+    api = env["api"]
+    # Start claiming 2 files but only send 1 -> finish fails the manifest.
+    started = api.start_upload(
+        tournament_id=marker.tournament_id, discipline=marker.discipline,
+        table_name=marker.table, expected_files=2, expected_bytes=10,
+        card_uuid=marker.card_uuid,
+    )
+    cid = started["id"]
+    import io as _io
+    api.upload_chunk(cid, relative_name="v.mp4", fileobj=_io.BytesIO(b"x" * 10))
+    from upload_client.api_client import ManifestRejected
+    with pytest.raises(ManifestRejected):
+        api.finish_upload(cid)
+
+    reopened = api.reopen(cid)
+    assert reopened["state"] == "uploading"
+    # Now send the second file so the (2-file) manifest matches and verify.
+    api.upload_chunk(cid, relative_name="v2.mp4", fileobj=_io.BytesIO(b""))
+    # expected_bytes was 10 and we now have 10 bytes across 2 files -> ok.
+    finished = api.finish_upload(cid)
+    assert finished["state"] == "verified"
+
+
 def test_cancel_marks_cancelled(env, tmp_path: Path) -> None:
     card_root = make_card(tmp_path / "card", tournament_id=env["tid"])
     marker = read_marker(card_root)

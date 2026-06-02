@@ -11,17 +11,22 @@ asserts that parity to catch drift.
 DCIM flattening
 ---------------
 Cameras drop ``.MP4`` files into nested ``DCIM/<sub>/`` folders; the
-pipeline expects them flat in ``ETxx/``. The client owns the flattening
-(Issue #15: "Tool extrahiert flach Client-seitig", closes Lücke A) by
-choosing a flat ``relative_name`` per file. Basename collisions across
-sub-folders (Panasonic restarts numbering per card) are de-collided with
-a deterministic ``_2``/``_3`` suffix. The mapping is a pure function of
-the (sorted) card contents, so a re-scan during resume yields identical
-names and never re-sends a file under a new name.
+pipeline expects them flat in ``ETxx/`` and merges them in lexical
+filename order (``pipeline/rename_mp4.py`` sorts by name, non-recursive).
+The client owns the flattening (Issue #15: "Tool extrahiert flach
+Client-seitig", closes Lücke A) by choosing a flat ``relative_name`` per
+file.
 
-Splitting one card across two recording sessions into ``ETxx_1`` /
-``ETxx_2`` is an open question in Issue #15 and is intentionally NOT
-decided here - we flatten into a single table folder.
+Operator decision (2026-06-02): all ``.MP4`` files of a table - including
+those spread across several sub-folders / recording sessions - are merged
+into the one ``ETxx`` folder; there is no ``ETxx_1`` / ``ETxx_2`` split.
+To keep the merge chronological we preserve the natural walk order (sorted
+by relative path = sub-folder, then filename): if the bare basenames are
+already unique and in that order we keep them; otherwise every file gets a
+zero-padded index prefix so the lexical sort still equals the walk order.
+The mapping is a pure function of the (sorted) card contents, so a re-scan
+during resume yields identical names and never re-sends a file under a new
+name.
 """
 
 from __future__ import annotations
@@ -74,24 +79,30 @@ def _is_ignored(entry: Path) -> bool:
     return any(entry.name.endswith(s) for s in IGNORE_SUFFIXES)
 
 
-def _flatten_name(original_name: str, used: set) -> str:
-    """Return a unique flat name, de-colliding deterministically."""
-    if original_name not in used:
-        return original_name
-    stem = Path(original_name).stem
-    suffix = Path(original_name).suffix
-    i = 2
-    while f"{stem}_{i}{suffix}" in used:
-        i += 1
-    return f"{stem}_{i}{suffix}"
+def _flat_names(rels: List[str]) -> List[str]:
+    """Map walk-ordered relative paths to flat, order-preserving names.
+
+    ``rels`` is already in walk order (sorted by relative path). If the bare
+    basenames are unique AND already lexically sorted (the common single
+    sub-folder case), keep them unchanged. Otherwise prefix every file with
+    a zero-padded index so the lexical sort of the flat names still equals
+    the walk order and names stay unique.
+    """
+    basenames = [Path(r).name for r in rels]
+    unique = len(set(basenames)) == len(basenames)
+    in_order = basenames == sorted(basenames)
+    if unique and in_order:
+        return basenames
+    width = max(3, len(str(len(rels))))
+    return [f"{i + 1:0{width}d}_{name}" for i, name in enumerate(basenames)]
 
 
 def build_manifest(card_root: Path, *, flatten: bool = True) -> CardManifest:
     """Walk ``card_root`` and build the upload manifest.
 
-    With ``flatten=True`` (default) every file gets a flat ``relative_name``
-    (basename, de-collided). With ``flatten=False`` the POSIX path relative
-    to the card root is kept (useful for tests / debugging).
+    With ``flatten=True`` (default) every file gets a flat, order-preserving
+    ``relative_name``. With ``flatten=False`` the POSIX path relative to the
+    card root is kept (useful for tests / debugging).
     """
     root = Path(card_root)
     raw: List[Tuple[Path, str, int]] = []
@@ -103,14 +114,10 @@ def build_manifest(card_root: Path, *, flatten: bool = True) -> CardManifest:
         rel = entry.relative_to(root).as_posix()
         raw.append((entry, rel, entry.stat().st_size))
 
-    files: List[FileEntry] = []
-    used: set = set()
-    for path, rel, size in raw:
-        if flatten:
-            name = _flatten_name(Path(rel).name, used)
-        else:
-            name = rel
-        used.add(name)
-        files.append(FileEntry(path=path, relative_name=name, size=size))
-
+    rels = [rel for _path, rel, _size in raw]
+    names = _flat_names(rels) if flatten else rels
+    files = [
+        FileEntry(path=path, relative_name=name, size=size)
+        for (path, _rel, size), name in zip(raw, names)
+    ]
     return CardManifest(root=root, files=tuple(files))

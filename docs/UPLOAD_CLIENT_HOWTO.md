@@ -119,6 +119,7 @@ curl -b cookies.txt -X POST \
 | POST   | `/api/upload/<card_id>/chunk`       | Multipart upload of one file (form: `relative_name`, `file`) |
 | POST   | `/api/upload/<card_id>/finish`      | Manifest verification; -> verified or failed |
 | POST   | `/api/upload/release`               | Atomic rename for one or many `card_ids` |
+| POST   | `/api/upload/<card_id>/reopen`      | Reopen a failed card (failed -> uploading) for an in-place retry |
 | POST   | `/api/upload/<card_id>/cancel`      | Wipe staging + mark cancelled |
 | GET    | `/api/upload/status`                | List cards (optional `?discipline=`, `?tournament_id=`) |
 
@@ -131,11 +132,17 @@ uploading ─→ verified  ─→ released   (happy path)
     │            │
     │            └─→ failed  (manifest mismatch or release IO error)
     │                  │
-    │                  └─→ uploading  (operator retries)
+    │                  └─→ uploading  (reopen: re-send + finish in place,
+    │                                  keeps card_uuid + staged chunks)
     │
     └─→ interrupted ─→ uploading  (resume after card pull / network drop)
     └─→ cancelled                 (terminal)
 ```
+
+The `failed -> uploading` edge is driven by `POST /api/upload/<id>/reopen`.
+It preserves the card's `card_uuid` and whatever already landed in staging,
+so a manifest-rejected card is retried in place rather than re-uploaded
+from scratch under a new id.
 
 `released` is terminal: the folder is now the watcher's responsibility,
 not ours.
