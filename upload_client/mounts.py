@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import string
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import Callable, List, Optional, Tuple
 
 # POSIX locations where removable volumes are typically mounted.
 _POSIX_MOUNT_PARENTS = ("/media", "/run/media", "/Volumes")
@@ -58,3 +59,68 @@ def _posix_roots() -> List[Path]:
                 continue
             roots.append(child)
     return roots
+
+
+# ---------------------------------------------------------------------------
+# Volume identity (name + serial) - drives table + card-id derivation.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VolumeInfo:
+    """Identity of a mounted volume, independent of its drive letter."""
+
+    root: Path
+    label: Optional[str]    # volume name, e.g. "E01"
+    serial: Optional[str]   # volume serial number (hex), if readable
+
+
+# Reads (label, serial) for a root. Injectable so the derivation logic is
+# unit-testable without a real removable volume.
+VolumeReader = Callable[[Path], Tuple[Optional[str], Optional[str]]]
+
+
+def read_volume_info(root: Path, *, reader: Optional[VolumeReader] = None) -> VolumeInfo:
+    """Return the volume name + serial for *root* (best-effort)."""
+    read = reader or _default_volume_reader
+    try:
+        label, serial = read(Path(root))
+    except OSError:
+        label, serial = None, None
+    return VolumeInfo(root=Path(root), label=label or None, serial=serial or None)
+
+
+def _default_volume_reader(root: Path) -> Tuple[Optional[str], Optional[str]]:
+    if sys.platform.startswith("win"):
+        return _windows_volume(root)
+    return _posix_volume(root)
+
+
+def _windows_volume(root: Path) -> Tuple[Optional[str], Optional[str]]:
+    """Read the volume name + serial via the Win32 ``GetVolumeInformationW``."""
+    import ctypes
+    from ctypes import wintypes
+
+    drive = f"{str(root).rstrip(chr(92))[:2]}\\"  # e.g. "E:\\"
+    name_buf = ctypes.create_unicode_buffer(261)
+    serial = wintypes.DWORD(0)
+    ok = ctypes.windll.kernel32.GetVolumeInformationW(  # type: ignore[attr-defined]
+        ctypes.c_wchar_p(drive),
+        name_buf, ctypes.sizeof(name_buf),
+        ctypes.byref(serial),
+        None, None, None, 0,
+    )
+    if not ok:
+        return None, None
+    label = name_buf.value or None
+    return label, f"{serial.value:08X}"
+
+
+def _posix_volume(root: Path) -> Tuple[Optional[str], Optional[str]]:
+    """POSIX fallback: the mount directory name is the volume name.
+
+    Linux/macOS mount removable media under ``/media/<user>/<LABEL>`` etc.,
+    so the directory name *is* the volume label. No portable serial here.
+    """
+    name = Path(root).name
+    return (name or None), None

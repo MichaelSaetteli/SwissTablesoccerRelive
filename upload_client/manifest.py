@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Set, Tuple
 
 from upload_client.marker import MARKER_NAME
 
@@ -44,6 +44,12 @@ IGNORE_NAMES = frozenset({MARKER_NAME, ".upload_meta.json"})
 IGNORE_SUFFIXES = (".partial",)
 
 
+# Only these are uploaded. Cameras drop housekeeping files (BACKUP.HST,
+# INDEX.DAT ...) into DCIM/; whitelisting video keeps them out of the
+# upload AND out of the manifest the server verifies against.
+VIDEO_SUFFIXES = (".mp4",)
+
+
 @dataclass(frozen=True)
 class FileEntry:
     """One file to upload."""
@@ -51,6 +57,7 @@ class FileEntry:
     path: Path           # absolute source path on the card
     relative_name: str   # flat POSIX name sent to the server
     size: int            # bytes
+    mtime: float = 0.0   # source mtime (epoch secs), for date display
 
 
 @dataclass(frozen=True)
@@ -79,6 +86,14 @@ def _is_ignored(entry: Path) -> bool:
     return any(entry.name.endswith(s) for s in IGNORE_SUFFIXES)
 
 
+def _dcim_subdir(rel_posix: str) -> Optional[str]:
+    """Return the ``DCIM/<sub>`` folder name a relative path lives in, else None."""
+    parts = rel_posix.split("/")
+    if len(parts) >= 2 and parts[0].upper() == "DCIM":
+        return parts[1]
+    return None
+
+
 def _flat_names(rels: List[str]) -> List[str]:
     """Map walk-ordered relative paths to flat, order-preserving names.
 
@@ -97,27 +112,44 @@ def _flat_names(rels: List[str]) -> List[str]:
     return [f"{i + 1:0{width}d}_{name}" for i, name in enumerate(basenames)]
 
 
-def build_manifest(card_root: Path, *, flatten: bool = True) -> CardManifest:
+def build_manifest(
+    card_root: Path,
+    *,
+    flatten: bool = True,
+    video_only: bool = True,
+    selected_subdirs: Optional[Set[str]] = None,
+) -> CardManifest:
     """Walk ``card_root`` and build the upload manifest.
 
-    With ``flatten=True`` (default) every file gets a flat, order-preserving
-    ``relative_name``. With ``flatten=False`` the POSIX path relative to the
-    card root is kept (useful for tests / debugging).
+    * ``video_only`` (default) keeps only ``VIDEO_SUFFIXES`` files, so camera
+      housekeeping never gets uploaded or counted.
+    * ``selected_subdirs`` (set of ``DCIM/<sub>`` names): when given, files
+      living under a ``DCIM`` sub-folder are included only if that sub-folder
+      is selected. Files outside ``DCIM`` are always kept. ``None`` = all.
+    * ``flatten`` (default) gives each file a flat, order-preserving
+      ``relative_name``; ``flatten=False`` keeps the POSIX relative path.
     """
     root = Path(card_root)
-    raw: List[Tuple[Path, str, int]] = []
+    raw: List[Tuple[Path, str, int, float]] = []
     for entry in sorted(root.rglob("*")):
         if not entry.is_file():
             continue
         if _is_ignored(entry):
             continue
+        if video_only and entry.suffix.lower() not in VIDEO_SUFFIXES:
+            continue
         rel = entry.relative_to(root).as_posix()
-        raw.append((entry, rel, entry.stat().st_size))
+        if selected_subdirs is not None:
+            sub = _dcim_subdir(rel)
+            if sub is not None and sub not in selected_subdirs:
+                continue
+        stat = entry.stat()
+        raw.append((entry, rel, stat.st_size, stat.st_mtime))
 
-    rels = [rel for _path, rel, _size in raw]
+    rels = [rel for _path, rel, _size, _mt in raw]
     names = _flat_names(rels) if flatten else rels
     files = [
-        FileEntry(path=path, relative_name=name, size=size)
-        for (path, _rel, size), name in zip(raw, names)
+        FileEntry(path=path, relative_name=name, size=size, mtime=mtime)
+        for (path, _rel, size, mtime), name in zip(raw, names)
     ]
     return CardManifest(root=root, files=tuple(files))
