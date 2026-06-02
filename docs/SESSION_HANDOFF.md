@@ -1,8 +1,8 @@
 # Session-Handoff — SwissTablesoccerRelive
 
 **Letzter Update:** 2026-06-02
-**Letzte Session:** Slice 2 von Issue #15, Block 1 (PySide6-Client — headless
-Core) auf Branch `claude/serene-fermi-pOUQb`
+**Letzte Session:** Slice 2 von Issue #15 **komplett** (PySide6-Client: Core,
+GUI, Mount-Monitoring, Packaging + Doku) auf Branch `claude/serene-fermi-pOUQb`
 
 Dieses Dokument ist der **eine Anlaufpunkt** fuer eine neue Claude-Session
 oder einen neuen Mitleser. Wer hier alles liest, hat den Kontext den die
@@ -38,17 +38,27 @@ laufende Arbeit braucht — die volle Chat-Historie ist nicht noetig.
 | Nummer | Titel | Status |
 |---|---|---|
 | PR #13 | fix(archive): include work_ so originals survive | Code-Review erledigt, mergebar |
-| PR #16 | feat(upload): server contract for the operator upload tool | Slice 1, offen. **Achtung:** der `POST /api/upload/<id>/reopen`-Endpoint wurde NACH #16 auf dem Slice-2-Branch `claude/serene-fermi-pOUQb` nachgeruestet — beim Merge von #16 ist er noch NICHT dabei, kommt erst mit Slice 2. |
+| PR #16 | feat(upload): server contract for the operator upload tool | Slice 1, offen. **Achtung — beim Merge von #16 mitnehmen:** auf dem Slice-2-Branch `claude/serene-fermi-pOUQb` wurden NACH #16 ZWEI Slice-1-Server-Aenderungen nachgeruestet, die noch NICHT in #16 sind: (1) `POST /api/upload/<id>/reopen` (failed -> uploading), (2) `expected_cards_*` durch create/update-Tournament gereicht (db/tournaments + web/services), damit der „X / Y verifiziert"-Check echte Zahlen hat. Beide kommen erst mit Slice 2 — oder vorher cherry-picken. |
 | Issue #14 | Auto-extract MP4s from SD card DCIM subfolders (Luecke A) | open — durch Issue #15 Slice 2 (DCIM-Flatten im Client) konzeptionell geschlossen |
-| Issue #15 | STS-Upload client tool (zero-error operator upload) | active — Slice 2 Block 1 (Core) erledigt auf `claude/serene-fermi-pOUQb`; naechstes: PySide6-GUI |
+| Issue #15 | STS-Upload client tool (zero-error operator upload) | **Slice 2 komplett** auf `claude/serene-fermi-pOUQb` (Core, GUI, Mount-Monitoring, Packaging, Doku). Offen nur noch: visuelle Windows-Sichtung + echter `.exe`-Build auf Windows. |
 
-**Branch `claude/serene-fermi-pOUQb` (Slice 2)** ist auf `feat/upload-staging-server`
-(PR #16) basiert, damit der Client lokal gegen den echten Server round-trip-getestet
-werden kann. Block 1 geliefert: `upload_client/`-Paket (marker, manifest mit
-order-preserving DCIM-Flatten, api_client, card_scanner, atomares resume-state,
-upload_engine) + 50 Client-Tests (inkl. End-to-End gegen den echten Flask-
-Server). Zusaetzlich Slice-1-seitig nachgeruestet: der
-`reopen`-Endpoint (failed -> uploading, in-place retry) — siehe PR-#16-Zeile.
+**Branch `claude/serene-fermi-pOUQb` (Slice 2, komplett)** ist auf
+`feat/upload-staging-server` (PR #16) basiert, damit der Client lokal gegen den
+echten Server round-trip-getestet werden kann. Geliefert (414 Tests gruen,
+12 ffmpeg-Failures nur mangels ffmpeg-Binary im CI-Container):
+
+* `upload_client/`-Core: marker, manifest (order-preserving DCIM-Flatten),
+  api_client, card_scanner, atomares resume-state, upload_engine.
+* PySide6-GUI (`upload_client/ui/`): Wireframe-Layout, Parallel-Upload-Manager
+  (Thread-Pool, 1-24 Slots), Praesentations-/Badge-Logik, nur offscreen getestet.
+* Hardware-Mount-Monitoring (`mount_watcher.py`, poll-basiert; pyudev/wmi bewusst
+  NICHT — siehe §6a): Karte gezogen -> interrupted + rote Warnung, Re-Insertion
+  -> Resume. Resume-Hinweis beim Tool-Neustart.
+* Packaging: `upload_client.spec` + `scripts/sts_upload_gui.py` (PyInstaller
+  single-file; `.exe` muss auf Windows gebaut werden).
+* Doku: `docs/UPLOAD_CLIENT_OPERATOR.md` + `docs/UPLOAD_CLIENT_ADMIN.md`.
+* Server-Vertrag-Doku: `docs/UPLOAD_CLIENT_HOWTO.md` (inkl. reopen).
+* Zwei Slice-1-Server-Nachruestungen (reopen + expected_cards) — siehe PR-#16-Zeile.
 
 ## 4. Bekannte Bugs, die noch nicht gefixt sind
 
@@ -79,32 +89,35 @@ Live-bewiesen mit echtem Lauf gegen die NAS:
 * Per-card State-Machine durchgespielt (uploading → verified → released)
 * Manifest-Verifikation (3 Files / 6.291.456 Bytes) erfolgreich
 
-## 6. Was als naechstes ansteht — Slice 2 von Issue #15
+## 6. Slice 2 von Issue #15 — ✅ KOMPLETT
 
-Das ist der **konkrete naechste Arbeitsblock**. Vollstaendige Spec in
-Issue #15; hier die Headline:
+Slice 2 ist auf `claude/serene-fermi-pOUQb` fertig gebaut. Alle urspruenglich
+geplanten Bloecke sind erledigt (Detail-Mapping zu Dateien siehe §3):
 
-1. **PySide6-GUI** (Cross-Platform, Windows zwingend, macOS optional)
-   * Wireframe aus Issue #15
-   * Per-Karte-Liste mit State-Badges (`uploading`, `verified`,
-     `released`, `failed`, `interrupted`)
-   * `Auto-Release`-Checkbox (Default off)
-   * Pro Karte: aktueller File-Fortschritt, ETA, Safe-to-remove-Indikator
-2. **SD-Karten-Auto-Detection**
-   * Mount/unmount-Events lauschen (`pyudev` auf Linux, `wmi` auf Windows)
-   * Marker-Datei lesen (`.sts-card.json`)
-   * Vollstaendigkeits-Check (erwartete vs gefundene Karten)
-3. **Hardware-Mount-Monitoring**
-   * Karte entfernt waehrend `uploading` → State `interrupted`
-   * Karte re-inserted → resumed, nicht restarted
-4. **Lokales Resume-State-File**
-   * Tool-Crash → beim Neustart "X Karten waren in Upload, fortsetzen?"
-5. **Distribution**
-   * Windows: portable `.exe` via PyInstaller
-   * Auto-Update vorerst nicht; Admin verteilt neue Version pro Turnier
-6. **Operator + Admin Doku**
+1. **PySide6-GUI** ✅ — Wireframe-Layout, State-Badges, Auto-Release-Checkbox,
+   Per-Karte-Fortschritt + Safe-to-remove-Indikator (`upload_client/ui/`).
+   *Nur offscreen getestet — visuelle Windows-Sichtung steht aus.*
+2. **SD-Karten-Detection** ✅ — Marker lesen, Vollstaendigkeits-Check gegen
+   `expected_cards_*` (jetzt auch settable), `mounts.py` discovery.
+3. **Hardware-Mount-Monitoring** ✅ — `mount_watcher.py` (poll-basiert):
+   gezogen waehrend `uploading` → `interrupted` + rote Warnung, Re-Insertion
+   → Resume.
+4. **Lokales Resume-State-File** ✅ — atomar, thread-safe; Resume-Hinweis beim
+   Tool-Neustart.
+5. **Distribution** ✅ — `upload_client.spec` + `scripts/sts_upload_gui.py`
+   (PyInstaller single-file; `.exe`-Build muss auf Windows laufen).
+6. **Operator + Admin Doku** ✅ — `docs/UPLOAD_CLIENT_OPERATOR.md`,
+   `docs/UPLOAD_CLIENT_ADMIN.md`.
 
-Realistisch **1.5–2 Wochen fokussierte Arbeit** fuer Slice 2.
+**Wirklich offen (nicht-Code):**
+* Visuelle Sichtung der GUI auf einem echten Windows-Rechner.
+* `.exe` auf Windows bauen + an die Operatoren verteilen.
+* Beim Merge von PR #16 die zwei Slice-1-Server-Nachruestungen mitnehmen
+  (reopen + expected_cards, siehe §3).
+* Optional: Web-UI-Formularfelder fuer die erwartete Karten-Anzahl (heute
+  nur via API/curl gesetzt — siehe Admin-Doku).
+* Optional: echtes Event-Mount-Backend (pyudev/wmi) statt Polling — bewusst
+  zurueckgestellt, siehe §6a.
 
 ## 6a. Slice 2 — Settled Requirements (nicht mehr diskutieren)
 
@@ -187,6 +200,12 @@ fehler** entschieden, nicht „nice to have":
   in genau dieser Sortierung (`pipeline/rename_mp4.py`, nicht-rekursiv). Das
   schliesst die zuvor offene Frage aus Issue #15 („zwei Sessions → splitten?").
   Implementiert in `upload_client/manifest.py::_flat_names`.
+* **Mount-Detection: Polling, nicht pyudev/wmi (Entscheid 2026-06-02)**: Der
+  `MountWatcher` pollt die Mount-Liste (~1.5s) und difft eingesteckt/entfernt.
+  Bewusst kein Event-Backend: ein ~1.5s-Poll erkennt eine gezogene Karte
+  zuverlaessig, und pyudev/wmi bringen Plattform-Deps, die headless nicht
+  testbar sind. Die Listen-Quelle ist injizierbar (`mount_watcher.py`), ein
+  Event-Backend kann sie spaeter ersetzen ohne GUI-Aenderung.
 
 ### Was bewusst NICHT zum MVP gehoert
 
