@@ -52,6 +52,7 @@ COPY web/ ./web/
 COPY youtube/ ./youtube/
 COPY db/ ./db/
 COPY archive/ ./archive/
+COPY upload_staging/ ./upload_staging/
 
 # Drop privileges. /data is mounted by the operator and must be writable
 # by uid 1000 (briefing s.8). On Synology DSM the operator chowns the
