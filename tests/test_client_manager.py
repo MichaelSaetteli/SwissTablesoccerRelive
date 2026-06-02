@@ -231,3 +231,27 @@ def test_update_pending_does_not_disturb_uploaded(env, tmp_path: Path) -> None:
     snap = mgr.snapshot()
     assert snap.rows[0].discipline == "Einzel"
     assert snap.rows[0].state == CLIENT_VERIFIED
+
+
+def test_handle_removed_ignores_false_alarm_when_root_exists(tmp_path: Path) -> None:
+    from tests.client_helpers import FakeSession
+    from upload_client.card_scanner import CARD_READY, ScannedCard
+    from upload_client.manifest import CardManifest
+    from upload_client.marker import CardMarker
+    from upload_client.upload_engine import CLIENT_UPLOADING
+
+    store = StateStore(tmp_path / "s.json")
+    _seed_progress(store, "u1", "ET01", CLIENT_UPLOADING)
+    engine = UploadEngine(ApiClient("http://x", session=FakeSession()), store)
+    mgr = UploadManager(engine, max_parallel=1)
+
+    root = tmp_path / "E01"
+    root.mkdir()  # card is STILL physically present
+    marker = CardMarker("u1", 1, "T", "Einzel", "ET01")
+    scanned = ScannedCard(root=root, status=CARD_READY, marker=marker,
+                          manifest=CardManifest(root=root, files=()))
+    mgr.add_scanned({scanned.key: scanned})
+
+    # The watcher reported "removed", but the drive still exists -> ignore.
+    assert mgr.handle_removed([root]) == []
+    assert engine.load("u1").state == CLIENT_UPLOADING  # not interrupted

@@ -158,8 +158,14 @@ class UploadManager:
     def handle_removed(self, roots) -> List[str]:
         """A card was physically removed: flip any uploading one to interrupted.
 
-        Returns the table names that were actually interrupted (were
-        uploading) so the GUI can name them in the warning.
+        Guards against false alarms: a heavy read can make a removable drive
+        miss a single mount poll without actually being unplugged. Before
+        interrupting we re-check that the card's root is *really* gone; if it
+        still exists, the "removed" event was spurious and is ignored. A
+        genuinely pulled card (root no longer exists) is still caught - and a
+        real read failure surfaces via the upload thread anyway.
+
+        Returns the table names that were actually interrupted.
         """
         rootset = {str(Path(r)) for r in roots}
         affected: List[str] = []
@@ -170,6 +176,11 @@ class UploadManager:
                 continue
             if str(card.root) not in rootset:
                 continue
+            try:
+                if Path(card.root).exists():
+                    continue  # false alarm - card is still mounted
+            except OSError:
+                pass  # cannot stat -> treat as gone
             current = self._engine.load(card.marker.card_uuid)
             if current is not None and current.state == CLIENT_UPLOADING:
                 self._engine.mark_interrupted(card.marker.card_uuid)
