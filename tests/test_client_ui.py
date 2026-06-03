@@ -164,6 +164,19 @@ def test_reset_button_is_noop_when_declined(qapp, monkeypatch):
     assert win.table.rowCount() == 1
 
 
+def test_select_all_toggles_every_checkbox(qapp):
+    rows = [_row("u1", "ET01", CLIENT_VERIFIED), _row("u2", "ET02", CLIENT_VERIFIED)]
+    win = MainWindow(StubManager(_snapshot(rows)), scan_fn=lambda: {}, poll_ms=10_000)
+
+    win.on_toggle_select_all()  # none -> all checked
+    states = [win.table.item(win._row_of[k], 0).checkState() for k in ("u1", "u2")]
+    assert all(s == Qt.Checked for s in states)
+
+    win.on_toggle_select_all()  # all -> none
+    states = [win.table.item(win._row_of[k], 0).checkState() for k in ("u1", "u2")]
+    assert all(s == Qt.Unchecked for s in states)
+
+
 def test_release_selected_only_releases_checked_verified(qapp):
     rows = [_row("u1", "ET01", CLIENT_VERIFIED), _row("u2", "ET02", CLIENT_UPLOADING)]
     mgr = StubManager(_snapshot(rows))

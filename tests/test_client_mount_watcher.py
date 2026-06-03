@@ -28,7 +28,8 @@ def test_no_change_on_steady_state(tmp_path: Path) -> None:
 def test_removal_then_reinsertion(tmp_path: Path) -> None:
     a, b = tmp_path / "a", tmp_path / "b"
     current = {"roots": [a, b]}
-    w = MountWatcher(list_roots=lambda: current["roots"])
+    # confirm=1 keeps this the classic "one missing poll = removed" check.
+    w = MountWatcher(list_roots=lambda: current["roots"], removal_confirmations=1)
     w.poll()  # baseline a, b
 
     current["roots"] = [a]  # b pulled
@@ -41,3 +42,47 @@ def test_removal_then_reinsertion(tmp_path: Path) -> None:
     assert change.inserted == [b]
     assert change.removed == []
     assert w.present == sorted([a, b])
+
+
+def test_transient_miss_does_not_report_removal(tmp_path: Path) -> None:
+    """A heavy-read stat glitch (one missing poll) must NOT fire a removal."""
+    a = tmp_path / "a"
+    current = {"roots": [a]}
+    w = MountWatcher(list_roots=lambda: current["roots"], removal_confirmations=3)
+    w.poll()  # baseline
+
+    current["roots"] = []          # glitch: card briefly unstattable
+    assert w.poll().removed == []  # 1 miss - below threshold
+    current["roots"] = [a]         # card answers again
+    assert w.poll().removed == []  # recovered
+    # Still considered present, miss counter reset.
+    assert w.present == [a]
+
+
+def test_removal_fires_only_after_consecutive_misses(tmp_path: Path) -> None:
+    a = tmp_path / "a"
+    current = {"roots": [a]}
+    w = MountWatcher(list_roots=lambda: current["roots"], removal_confirmations=3)
+    w.poll()  # baseline
+
+    current["roots"] = []          # card genuinely pulled, stays gone
+    assert w.poll().removed == []  # miss 1
+    assert w.poll().removed == []  # miss 2
+    assert w.poll().removed == [a]  # miss 3 -> confirmed removed
+    assert w.present == []
+    # Once confirmed, it is not reported again.
+    assert w.poll().removed == []
+
+
+def test_flicker_never_confirms_removal(tmp_path: Path) -> None:
+    """Present/absent/present/absent flicker must never confirm a removal."""
+    a = tmp_path / "a"
+    current = {"roots": [a]}
+    w = MountWatcher(list_roots=lambda: current["roots"], removal_confirmations=3)
+    w.poll()
+    for _ in range(5):
+        current["roots"] = []
+        assert w.poll().removed == []   # miss
+        current["roots"] = [a]
+        assert w.poll().removed == []   # recovers, counter resets
+    assert w.present == [a]

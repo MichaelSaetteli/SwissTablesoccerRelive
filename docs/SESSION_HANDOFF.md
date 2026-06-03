@@ -11,6 +11,37 @@ laufende Arbeit braucht — die volle Chat-Historie ist nicht noetig.
 
 ## 0. JETZT GERADE (2026-06-03) — Stand + naechste Schritte
 
+### ⚠ Befund aus dem Windows-Upload-Test: False-Alarm-Bug RICHTIG gefixt
+
+Beim echten Test brach der Upload **beim Klick auf „Hochladen starten"**
+sofort ab → Status `unterbrochen` + „Karte entfernt"-Warnung, obwohl die
+Karte steckte. **Ursache gefunden:** Waehrend des intensiven Lesens
+antwortet `Path("E:\\").exists()` (in `mounts.py::_windows_roots`, Zeile 41)
+kurz nicht → Karte faellt aus der Mount-Liste → Watcher meldet „entfernt".
+Der bisherige Schutz in `handle_removed` nutzte **denselben** `exists()`-
+Aufruf und versagte im selben Moment mit.
+
+**Fix (committet):** Removals werden im `MountWatcher` jetzt **entprellt**
+(debounce) — eine Karte gilt erst nach **3 aufeinanderfolgenden** Fehl-Polls
+(~4.5 s durchgehend weg) als entfernt. Ein einzelner Lese-Aussetzer setzt
+den Zaehler zurueck und loest keinen Fehlalarm mehr aus; eine wirklich
+gezogene Karte bleibt weg und wird weiterhin erkannt. Tests:
+`tests/test_client_mount_watcher.py` (transient miss / flicker / echte
+Entfernung). **Fallback** falls es auf noch langsamerer Hardware doch noch
+auftritt: `removal_confirmations` hochsetzen, oder Watcher-Interruption fuer
+`uploading`-Karten ganz weglassen (der Upload-Thread faengt eine echte
+Entfernung via Lesefehler selbst ab).
+
+**Ausserdem (UX, committet):** Das Freigabe-Kaestchen war missverstaendlich
+(wirkte wie „zum Hochladen aktivieren"). Spalte heisst jetzt **„Freigabe"**
+mit Hover-Erklaerung, plus Knopf **„Alle markieren"** (Select-all) fuer die
+gezielte Batch-Freigabe. Hochladen braucht weiterhin KEIN Kaestchen —
+„Hochladen starten" nimmt alle eingelesenen Karten.
+
+**→ Es braucht eine NEUE `.exe`** (Branch gepusht → CI baut; fuer einen
+sauberen Download Tag `upload-client-v1-rc2` pushen). Erst damit ist der
+False-Alarm weg.
+
 **Wo wir stehen:** Der Upload-Client funktioniert fachlich auf Windows
 (Label→Tisch, .mp4-Whitelist, Volume-Serial-Identitaet, DCIM-Datums-Alarm).
 Heute wurde die **GUI komplett ueberarbeitet** (Branch

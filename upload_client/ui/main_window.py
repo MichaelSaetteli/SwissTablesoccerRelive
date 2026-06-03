@@ -49,7 +49,7 @@ from upload_client.upload_engine import (
 # Table columns
 (_COL_SEL, _COL_TABLE, _COL_DISC, _COL_PROG, _COL_STATUS, _COL_DATE,
  _COL_SAFE) = range(7)
-_HEADERS = ["", "Tisch", "Disziplin", "Fortschritt", "Status", "Datum", ""]
+_HEADERS = ["Freigabe", "Tisch", "Disziplin", "Fortschritt", "Status", "Datum", ""]
 
 _ERROR_BG = QColor(0xFD, 0xE7, 0xE9)
 _DONE_BG = QColor(0xE6, 0xF4, 0xEA)
@@ -405,7 +405,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(_COL_STATUS, QHeaderView.Fixed)
         header.setSectionResizeMode(_COL_DATE,   QHeaderView.Fixed)
         header.setSectionResizeMode(_COL_SAFE,   QHeaderView.Fixed)
-        self.table.setColumnWidth(_COL_SEL,   32)
+        self.table.setColumnWidth(_COL_SEL,   72)
         self.table.setColumnWidth(_COL_TABLE, 70)
         self.table.setColumnWidth(_COL_DISC,  110)
         self.table.setColumnWidth(_COL_STATUS, 110)
@@ -413,6 +413,14 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(_COL_SAFE,   32)
         self.table.setRowHeight(0, 36)
         self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
+        # The "Freigabe" checkbox is only for picking which verified cards to
+        # release - it is NOT needed to upload. Spell that out on hover.
+        sel_header = self.table.horizontalHeaderItem(_COL_SEL)
+        if sel_header is not None:
+            sel_header.setToolTip(
+                "Nur zum gezielten Freigeben einzelner Karten.\n"
+                "Zum Hochladen NICHT noetig — 'Hochladen starten' nimmt alle Karten."
+            )
         root.addWidget(self.table, 1)
 
         # Bottom bar: reset (left) + selective release + success label
@@ -433,6 +441,14 @@ class MainWindow(QMainWindow):
         self.lbl_success.setWordWrap(True)
         self.lbl_success.setVisible(False)
         bottom.addWidget(self.lbl_success, 1)
+
+        self.btn_select_all = QPushButton("Alle markieren")
+        self.btn_select_all.setObjectName("btn_quiet")
+        self.btn_select_all.setToolTip(
+            "Setzt bei allen Karten das Freigabe-Häkchen (oder entfernt es wieder)."
+        )
+        self.btn_select_all.clicked.connect(self.on_toggle_select_all)
+        bottom.addWidget(self.btn_select_all)
 
         self.btn_release_sel = QPushButton("Markierte freigeben")
         self.btn_release_sel.setObjectName("btn_secondary")
@@ -539,6 +555,22 @@ class MainWindow(QMainWindow):
         if keys:
             self._manager.release(keys)
         self.refresh()
+
+    def on_toggle_select_all(self) -> None:
+        """Check every Freigabe box, or clear them all if all are already set."""
+        items = [
+            self.table.item(idx, _COL_SEL) for idx in self._row_of.values()
+        ]
+        items = [it for it in items if it is not None]
+        if not items:
+            return
+        all_checked = all(it.checkState() == Qt.Checked for it in items)
+        new_state = Qt.Unchecked if all_checked else Qt.Checked
+        for it in items:
+            it.setCheckState(new_state)
+        self.btn_select_all.setText(
+            "Markierung aufheben" if new_state == Qt.Checked else "Alle markieren"
+        )
 
     def on_reset(self) -> None:
         """Forget all local upload state after a confirmation prompt.
