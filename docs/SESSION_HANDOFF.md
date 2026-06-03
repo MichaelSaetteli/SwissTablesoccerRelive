@@ -11,6 +11,40 @@ laufende Arbeit braucht — die volle Chat-Historie ist nicht noetig.
 
 ## 0. JETZT GERADE (2026-06-03) — Stand + naechste Schritte
 
+### ✅ WAHRE URSACHE GEFUNDEN: NAS-Config zeigt auf HDD (INV-1)
+
+Das Log der diagnostischen `.exe` zeigte den echten Fehler:
+```
+HTTP 400: staging root '/volume2/HDD12TB/staging_einzel' starts with HDD
+prefix '/volume2/'. Hot-path staging must live on SSD (/volume1/SDD/...).
+```
+**Kein Client-Bug.** Der Server lehnt `start_upload` korrekt ab: Die NAS-
+Einzel-Config (`/volume1/SDD/video-pipeline-config/config_einzel.json`) hat
+`eingang` auf der **HDD** (`/volume2/HDD12TB/eingang_einzel`). Der Upload-
+Staging-Ordner ist ein Nachbar von `eingang` (`upload_staging/paths.py`),
+landet also ebenfalls auf HDD → INV-1-Guard (`validate_staging_root`) wirft.
+
+**Fix (NAS-seitig, nicht im Code):** In
+`/volume1/SDD/video-pipeline-config/config_einzel.json` (und vermutlich
+`config_doppel.json` — bekannter Punkt aus §4) `eingang`/`work`/`output` auf
+`/volume1/SDD/...` umstellen (wie `config/config_einzel.json` im Repo), die
+SSD-Verzeichnisse anlegen, Container neu starten. Danach Upload erneut testen.
+Config-Pfade kommen aus `VIDEO_PIPELINE_DATA_DIR`
+(default `/volume1/SDD/video-pipeline-config`), geladen in `web/app.py:869`.
+
+**Offene Frage an den Operator:** SSD-Platz pruefen — ein Einzel-Schwung sind
+~24 Karten × ~25 GB. INV-1 verlangt SSD-Hot-Path; falls die SSD zu klein ist,
+ist das eine echte Architektur-Diskussion (aber INV-1 steht laut CLAUDE.md
+nicht zur Debatte).
+
+Die GUI-/Watcher-/Lock-Fixes davor bleiben gueltig und sinnvoll; sie waren
+nur nicht die Ursache dieses Abbruchs (die Diagnose-Schicht hat ihn
+aufgedeckt).
+
+---
+
+#### (vorheriger Stand — Diagnose-Schicht, jetzt erfuellt)
+
 ### ⚠⚠ Upload bricht WEITERHIN sofort auf „unterbrochen" ab — Diagnose eingebaut
 
 Trotz Debounce + Einzelinstanz-Sperre bricht der Upload beim Klick auf
