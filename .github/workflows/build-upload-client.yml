@@ -17,6 +17,9 @@ on:
       - 'requirements-client.txt'
       - '.github/workflows/build-upload-client.yml'
 
+permissions:
+  contents: write          # required to refresh the rolling test-build release
+
 jobs:
   build-windows:
     name: PyInstaller onefile (.exe)
@@ -55,3 +58,20 @@ jobs:
           path: dist/STS-Upload.exe
           if-no-files-found: error
           retention-days: 30
+
+      # Rolling "newest test build": one fixed Releases page that always
+      # carries the freshly built .exe, so the operator just bookmarks it and
+      # clicks download - no git tag, no Actions navigation, no zip. Marked as
+      # a pre-release so it is clearly the test build, not a versioned release.
+      - name: Refresh the rolling test-build release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: test-build
+          name: "STS-Upload — neueste Test-Version"
+          prerelease: true
+          files: dist/STS-Upload.exe
+          fail_on_unmatched_files: true
+          body: >
+            Automatisch aus dem letzten Push gebaut — immer die neueste
+            Version zum Testen. Fuer eine feste, versionierte Ausgabe an die
+            Operatoren stattdessen einen `upload-client-v*`-Release verwenden.

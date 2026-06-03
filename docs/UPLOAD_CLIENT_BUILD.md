@@ -8,25 +8,31 @@ laufen lassen** — GitHub baut die `.exe` bei jedem Push automatisch.
 
 | Ich will… | So geht's |
 |---|---|
-| Die **neueste** `.exe` zum Testen | Actions-Tab → letzter „Build Upload Client"-Run → unten **Artifacts** → `STS-Upload-windows` (Zip) herunterladen, entpacken. |
-| Eine **stabile Version für Kollegen** | Versions-Tag pushen (`upload-client-vN`) → GitHub veroeffentlicht eine **Release-Seite mit der `.exe` direkt dran** (kein Zip, feste URL, laeuft nicht ab). |
+| Die **neueste** `.exe` zum Testen | **Releases → „STS-Upload — neueste Test-Version"** → `.exe` herunterladen. Diese Seite wird bei jedem Push automatisch aktualisiert (fester Link, kein Zip, keine Befehle). |
+| Eine **stabile Version für Kollegen** | Im Browser: **Releases → „Draft a new release"** → neuen Tag `upload-client-vN` anlegen → **Publish**. GitHub baut die `.exe` und haengt sie an. (Oder per Tag-Push, siehe unten.) |
 
-## 1. Neueste `.exe` zum Testen (Artifact)
+> **Kein Terminal noetig.** Zum Testen reicht der feste „neueste Test-Version"-
+> Link. Fuer eine versionierte Ausgabe genuegt der „Draft a new release"-Knopf
+> im Browser.
 
-Jeder Push auf einen Branch, der `upload_client/**` aendert, startet
-automatisch den Workflow **Build Upload Client (Windows)**
-(`.github/workflows/build-upload-client.yml`).
+## 1. Neueste `.exe` zum Testen (fester Link, einfachster Weg)
 
-1. Repo → **Actions** → links **Build Upload Client (Windows)**.
-2. Obersten Run anklicken (gruener Haken = fertig, ~3 min).
-3. Ganz unten unter **Artifacts**: `STS-Upload-windows` herunterladen.
-4. Das ist ein **Zip** (GitHub zippt Artifacts immer) → entpacken →
-   `STS-Upload.exe`.
+Jeder Push, der `upload_client/**` aendert, startet automatisch den Workflow
+**Build Upload Client (Windows)**. Der baut die `.exe` und aktualisiert
+danach eine **rollende Pre-Release** unter dem festen Tag `test-build`.
 
-> Artifacts laufen nach **30 Tagen** ab. Fuer etwas Dauerhaftes → Release.
+**So holst du sie (kein Terminal, kein Zip):**
 
-Ohne Code-Aenderung trotzdem bauen: Actions → Workflow → **Run workflow**
-(manueller Dispatch).
+1. Repo → rechts **Releases** → **„STS-Upload — neueste Test-Version"**.
+2. Unter **Assets** die `STS-Upload.exe` herunterladen. Fertig.
+
+Diese Seite zeigt **immer** den neuesten Build — einfach den Link als
+Lesezeichen speichern. Nach einem Push ~3 min warten, dann neu laden.
+
+**Alternative (Artifact):** Actions → letzter Run → unten **Artifacts** →
+`STS-Upload-windows` (Zip, laeuft nach 30 Tagen ab). Nur noetig, wenn die
+Release-Seite mal nicht greift. Ohne Code-Aenderung bauen: Actions →
+Workflow → **Run workflow**.
 
 ## 2. Stabile Version fuer die Operatoren (Release)
 
