@@ -103,6 +103,14 @@ QPushButton#btn_secondary {
 }
 QPushButton#btn_secondary:hover { background: #e8f0fe; }
 QPushButton#btn_secondary:disabled { color: #9aa0a6; border-color: #9aa0a6; }
+QPushButton#btn_quiet {
+    background: transparent;
+    color: #5f6368;
+    border: none;
+    padding: 7px 10px;
+    font-size: 12px;
+}
+QPushButton#btn_quiet:hover { color: #b00020; text-decoration: underline; }
 QPushButton#btn_success {
     background: #34a853;
     color: white;
@@ -407,8 +415,19 @@ class MainWindow(QMainWindow):
         self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
         root.addWidget(self.table, 1)
 
-        # Bottom bar: selective release + success label
+        # Bottom bar: reset (left) + selective release + success label
         bottom = QHBoxLayout()
+
+        self.btn_reset = QPushButton("↺  Zurücksetzen")
+        self.btn_reset.setObjectName("btn_quiet")
+        self.btn_reset.setToolTip(
+            "Alle lokalen Upload-Spuren vergessen und neu beginnen.\n"
+            "Ersetzt das manuelle Löschen von state.json. Lädt nichts vom\n"
+            "Server, löscht keine Videos — nur den lokalen Fortschritts-Status."
+        )
+        self.btn_reset.clicked.connect(self.on_reset)
+        bottom.addWidget(self.btn_reset)
+
         self.lbl_success = QLabel("")
         self.lbl_success.setObjectName("lbl_success")
         self.lbl_success.setWordWrap(True)
@@ -519,6 +538,38 @@ class MainWindow(QMainWindow):
         keys = self._checked_releasable_keys()
         if keys:
             self._manager.release(keys)
+        self.refresh()
+
+    def on_reset(self) -> None:
+        """Forget all local upload state after a confirmation prompt.
+
+        The in-app replacement for deleting ``state.json`` by hand. Clears
+        the manager's tracked cards + local resume records, then wipes the
+        table so the next scan starts from a clean slate.
+        """
+        confirm = QMessageBox.question(
+            self,
+            "Zurücksetzen?",
+            "Alle lokalen Upload-Spuren werden vergessen und das Tool beginnt "
+            "neu.\n\nEs werden KEINE Videos und KEINE Server-Daten gelöscht — "
+            "nur der lokale Fortschritts-Status (state.json).\n\nFortfahren?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        reset = getattr(self._manager, "reset", None)
+        if callable(reset):
+            reset()
+        # Drop all table rows + per-row widgets so nothing stale lingers.
+        self.table.setRowCount(0)
+        self._row_of.clear()
+        self._disc_combos.clear()
+        self._prog_bars.clear()
+        self._rows_by_key.clear()
+        self._speed_data.clear()
+        self._speed_cache.clear()
+        self.lbl_hint.setVisible(False)
         self.refresh()
 
     def _checked_releasable_keys(self) -> List[str]:

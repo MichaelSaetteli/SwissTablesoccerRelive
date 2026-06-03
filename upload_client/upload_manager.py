@@ -155,6 +155,21 @@ class UploadManager:
     def cancel(self, card_uuid: str) -> Optional[CardProgress]:
         return self._engine.cancel(card_uuid)
 
+    def reset(self) -> None:
+        """Clear all local state: tracked cards, futures and resume records.
+
+        Backs the GUI "Zuruecksetzen / Neu beginnen" button - the in-app
+        replacement for manually deleting ``state.json``. In-flight uploads
+        are not force-killed (the pool keeps running any already-submitted
+        work), but a card that is not currently uploading is simply
+        forgotten; the next scan re-discovers whatever is still plugged in
+        from a clean slate.
+        """
+        with self._lock:
+            self._tracked.clear()
+            self._futures.clear()
+        self._engine.reset_local_state()
+
     def handle_removed(self, roots) -> List[str]:
         """A card was physically removed: flip any uploading one to interrupted.
 

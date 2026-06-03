@@ -146,6 +146,16 @@ class UploadEngine:
                 out.append(p)
         return out
 
+    def reset_local_state(self) -> None:
+        """Forget all local resume records (the ``state.json`` reset button).
+
+        Clears every persisted ``CardProgress`` so the next scan starts from
+        a clean slate. Server-side rows are untouched - this only drops the
+        client's local resume bookkeeping, which is the manual
+        "delete state.json" step turned into a safe in-app action.
+        """
+        self._store.clear()
+
     def mark_interrupted(self, card_uuid: str) -> Optional[CardProgress]:
         """Client-local uploading -> interrupted (card physically removed).
 

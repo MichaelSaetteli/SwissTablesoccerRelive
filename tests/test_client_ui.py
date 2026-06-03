@@ -67,6 +67,11 @@ class StubManager:
         self.calls.append(("handle_removed", list(roots)))
         return []
 
+    def reset(self) -> None:
+        self.calls.append(("reset",))
+        # Mirror the real manager: after reset the snapshot is empty.
+        self._snap = ManagerSnapshot(rows=[], summaries=[])
+
 
 class StubWatcher:
     """Returns scripted MountChange values, then steady state."""
@@ -128,6 +133,35 @@ def test_buttons_call_manager(qapp):
         win._scan_thread.join(timeout=5.0)
     win._check_scan_result()
     assert any(c[0] == "add" for c in mgr.calls)
+
+
+def test_reset_button_clears_state_when_confirmed(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    mgr = StubManager(_snapshot([_row("u1", "ET01", CLIENT_VERIFIED),
+                                 _row("u2", "ET02", CLIENT_UPLOADING)]))
+    win = MainWindow(mgr, scan_fn=lambda: {}, poll_ms=10_000)
+    assert win.table.rowCount() == 2
+
+    # Confirm the dialog -> manager.reset called and the table wiped.
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.Yes)
+    win.on_reset()
+    assert ("reset",) in mgr.calls
+    assert win.table.rowCount() == 0
+    assert win._row_of == {}
+
+
+def test_reset_button_is_noop_when_declined(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    mgr = StubManager(_snapshot([_row("u1", "ET01", CLIENT_VERIFIED)]))
+    win = MainWindow(mgr, scan_fn=lambda: {}, poll_ms=10_000)
+
+    # Decline the dialog -> nothing happens.
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.No)
+    win.on_reset()
+    assert ("reset",) not in mgr.calls
+    assert win.table.rowCount() == 1
 
 
 def test_release_selected_only_releases_checked_verified(qapp):

@@ -29,13 +29,19 @@ Heute wurde die **GUI komplett ueberarbeitet** (Branch
   `ffmpeg`-Binary im Container, NICHT durch den GUI-Umbau verursacht —
   per `git stash` gegengeprueft.)
 
+**`.exe` kommt aus der CI, nicht lokal bauen.** Jeder Push baut die Windows-
+`.exe` automatisch (`build-upload-client.yml`); fuer die Operatoren einen Tag
+`upload-client-vN` pushen → Release-Seite mit `.exe`. Voller Spickzettel:
+[`UPLOAD_CLIENT_BUILD.md`](UPLOAD_CLIENT_BUILD.md).
+
 **Blockierter Upload-Test (muss der Operator zuerst tun):**
-1. `%USERPROFILE%\.sts_upload\state.json` **loeschen** (alte „unterbrochen"-
-   Spur aus dem False-Alarm-Bug der alten `.exe` — sonst zeigt ET01 weiter
-   ⛔ unterbrochen statt ⏳ wartet).
-2. **Neue `.exe` bauen** (PyInstaller, auf Windows) — sie enthaelt erst jetzt
-   den GUI-Umbau + die False-Alarm- und Internal-Disk-Fixes.
-3. `.exe` starten → „SD-Karten einlesen" → ET01 muss ⏳ wartet zeigen.
+1. **Neue `.exe` aus der CI holen** (Artifact `STS-Upload-windows` vom
+   letzten Build, ODER via Release-Tag) — sie enthaelt erst jetzt den
+   GUI-Umbau, den Reset-Knopf und die False-Alarm-/Internal-Disk-Fixes.
+2. `.exe` starten. Falls noch eine alte ⛔-unterbrochen-Spur haengt:
+   **„↺ Zuruecksetzen"** unten links klicken (ersetzt das manuelle Loeschen
+   von `state.json`).
+3. „SD-Karten einlesen" → ET01 muss ⏳ wartet zeigen.
 4. „Hochladen starten" → Fortschrittsbalken muss sich byte-weise bewegen
    (MB/s + ETA sichtbar), 0/29 zaehlt langsam hoch (~850 MB pro Datei).
 
