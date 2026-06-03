@@ -38,9 +38,18 @@ mit Hover-Erklaerung, plus Knopf **„Alle markieren"** (Select-all) fuer die
 gezielte Batch-Freigabe. Hochladen braucht weiterhin KEIN Kaestchen —
 „Hochladen starten" nimmt alle eingelesenen Karten.
 
+**Einzelinstanz-Sperre (committet):** Der Operator hatte beim Test **zwei
+`.exe`-Instanzen** offen — die teilen sich `state.json` und dieselben Karten
+und verdoppeln die Leselast (verschaerft den Mount-Glitch). `run()` nimmt
+jetzt per `QLockFile` (`~/.sts_upload/sts_upload.lock`) eine Einzelinstanz-
+Sperre; ein zweiter Start zeigt „STS-Upload laeuft bereits" und beendet sich.
+Eine abgestuerzte Vorgaenger-Instanz wird ueber den 30s-Stale-Lock automatisch
+freigegeben. Helper `acquire_single_instance_lock` + Test in
+`tests/test_client_ui.py`.
+
 **→ Es braucht eine NEUE `.exe`** (Branch gepusht → CI baut; fuer einen
-sauberen Download Tag `upload-client-v1-rc2` pushen). Erst damit ist der
-False-Alarm weg.
+sauberen Download Tag `upload-client-v1-rc2` pushen). Erst damit sind der
+False-Alarm-Fix und die Einzelinstanz-Sperre drin.
 
 **Wo wir stehen:** Der Upload-Client funktioniert fachlich auf Windows
 (Label→Tisch, .mp4-Whitelist, Volume-Serial-Identitaet, DCIM-Datums-Alarm).

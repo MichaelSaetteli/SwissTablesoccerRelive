@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Set
 
+from PySide6.QtCore import QLockFile
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from upload_client.api_client import ApiError
@@ -30,6 +31,25 @@ from upload_client.upload_engine import UploadEngine
 from upload_client.upload_manager import UploadManager
 
 STATE_FILE = Path.home() / ".sts_upload" / "state.json"
+LOCK_FILE = Path.home() / ".sts_upload" / "sts_upload.lock"
+
+
+def acquire_single_instance_lock(path: Path) -> Optional[QLockFile]:
+    """Become the only running instance, or return None if one already runs.
+
+    Two instances would share ``state.json`` and the same SD cards, racing
+    each other's upload state and doubling the heavy-read load that makes a
+    card's drive root briefly unstattable (the false "card removed" trigger).
+    ``QLockFile`` is cross-platform and auto-recovers from a crashed previous
+    instance (stale lock), so a clean crash never locks the operator out.
+
+    The returned lock must be kept alive for the whole session; dropping it
+    releases the lock.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(path))
+    lock.setStaleLockTime(30_000)  # 30 s: reclaim a crashed instance's lock
+    return lock if lock.tryLock(100) else None
 
 
 @dataclass
@@ -88,6 +108,21 @@ def _make_scan_fn(active_tournaments: Dict[str, dict], state: IngestState):
 
 def run(argv=None) -> int:
     app = QApplication.instance() or QApplication(argv or sys.argv)
+
+    # Single-instance guard: refuse a second window with a clear message.
+    lock = acquire_single_instance_lock(LOCK_FILE)
+    if lock is None:
+        QMessageBox.warning(
+            None,
+            "STS-Upload laeuft bereits",
+            "STS-Upload ist bereits geoeffnet.\n\n"
+            "Bitte das schon laufende Fenster verwenden. Zwei Instanzen "
+            "gleichzeitig teilen sich denselben Status und dieselben SD-Karten "
+            "und koennen sich beim Upload gegenseitig stoeren.",
+        )
+        return 0
+    # Keep the lock alive for the whole session (GC would release it).
+    app._sts_instance_lock = lock  # type: ignore[attr-defined]
 
     login = LoginDialog()
     if login.exec() != LoginDialog.Accepted or login.api is None:

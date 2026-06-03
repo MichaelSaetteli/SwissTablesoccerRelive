@@ -164,6 +164,21 @@ def test_reset_button_is_noop_when_declined(qapp, monkeypatch):
     assert win.table.rowCount() == 1
 
 
+def test_single_instance_lock_blocks_second_acquire(qapp, tmp_path):
+    from upload_client.ui.app import acquire_single_instance_lock
+    path = tmp_path / "sts.lock"
+
+    first = acquire_single_instance_lock(path)
+    assert first is not None
+    # A second acquire while the first is held must fail (one instance only).
+    assert acquire_single_instance_lock(path) is None
+    # Releasing the first lets a fresh instance acquire it again.
+    first.unlock()
+    second = acquire_single_instance_lock(path)
+    assert second is not None
+    second.unlock()
+
+
 def test_select_all_toggles_every_checkbox(qapp):
     rows = [_row("u1", "ET01", CLIENT_VERIFIED), _row("u2", "ET02", CLIENT_VERIFIED)]
     win = MainWindow(StubManager(_snapshot(rows)), scan_fn=lambda: {}, poll_ms=10_000)
