@@ -11,7 +11,54 @@ laufende Arbeit braucht — die volle Chat-Historie ist nicht noetig.
 
 ## 0. JETZT GERADE (2026-06-03) — Stand + naechste Schritte
 
-### ✅ WAHRE URSACHE GEFUNDEN: NAS-Config zeigt auf HDD (INV-1)
+### ✅✅ UPLOAD LAEUFT! (2026-06-03, real auf Windows verifiziert)
+
+Der erste echte End-to-End-Upload (ET01, Einzel, 29 Dateien à bis 3 GB)
+laeuft — Fortschrittsbalken mit MB/s + ETA bewegt sich. Es brauchte **vier**
+hintereinander gestapelte Blocker, alle gefixt (Reihenfolge der Entdeckung):
+
+1. **NAS-Config auf HDD (INV-1)** → `start_upload` 400. Fix: `eingang`+`output`
+   in `config_einzel.json`/`config_doppel.json` auf `/volume1/SDD/...` (war
+   `/volume2/HDD12TB/...`). Staging ist ein Nachbar von `eingang`.
+2. **NAS auf falschem Branch** (`read-briefing-start-build` statt
+   `wizardly`) → `active-tournament` **405**. Fix: `git checkout
+   claude/wizardly-goodall-df2er` + `docker compose build` (Code steckt im
+   Image, nicht im Mount!).
+3. **Waitress 1-GB-Limit** → Chunk **413**. Fix: `max_request_body_size=32 GB`
+   + `channel_timeout=600` in `web/app.py::_serve` (commit auf wizardly).
+4. **Werkzeug 3.1 500-KB-Limit** (`max_form_memory_size`, greift wenn
+   `MAX_CONTENT_LENGTH` unset) → Chunk **413** (zweite Ebene!). Fix:
+   `MAX_CONTENT_LENGTH` + `MAX_FORM_MEMORY_SIZE = 32 GB` in `create_app`
+   (commit auf wizardly). Erkennungssignal: `werkzeug.__version__` existiert
+   in 3.1 nicht mehr.
+
+**Diagnose-Schicht war der Durchbruch** (commit auf feat-Branch): Log-Datei
+`~/.sts_upload/sts_upload.log` + UI zeigt echten `progress.error` statt
+pauschal „Karte entfernt". Ohne sie haetten wir die zwei 413-Ebenen nie
+auseinandergehalten.
+
+**Deploy-Gotchas (NAS), die unterwegs auftraten — fuer naechstes Mal:**
+* `.git` war root-owned → `git pull` schlug fehl. Fix: `sudo chown -R
+  saetteli:users /volume1/SDD/projects/SwissTablesoccerRelive`.
+* `docker compose up -d` allein recreated den Container nicht zuverlaessig
+  auf ein neues Image → `docker compose down && up -d` ist gruendlicher.
+* `docker compose build` ist nur dann wirksam, wenn der Code-Branch wirklich
+  ausgecheckt ist (COPY-Layer ist content-hashed; falscher Branch = falscher
+  oder gecachter Code).
+
+**Offen / als Naechstes:**
+* Upload bis `verified` durchlaufen lassen, dann `Freigeben` → atomarer
+  Handoff nach `eingang_einzel/ET01` → Pipeline. (End-to-End final bestaetigen.)
+* Server-Fixes (413×2) sind auf **wizardly** (commits d647b67, 828a4c6) UND
+  auf feat-Branch. Beim Merge feat→wizardly kein Konflikt erwartet.
+* Finale `upload-client-v1` fuer die Operatoren taggen (Browser „Draft a new
+  release" oder Tag-Push) — erst wenn der ganze Durchlauf inkl. Freigabe sitzt.
+* `.exe` mit „Angemeldet bleiben" (Auto-Login, DPAPI) ist auf feat-Branch +
+  in der test-build-`.exe` — Operator holt sie beim naechsten Download.
+
+---
+
+### ✅ (Blocker 1, Detail) NAS-Config zeigt auf HDD (INV-1)
 
 Das Log der diagnostischen `.exe` zeigte den echten Fehler:
 ```
