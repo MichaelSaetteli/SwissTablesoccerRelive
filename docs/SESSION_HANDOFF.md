@@ -1,12 +1,52 @@
 # Session-Handoff — SwissTablesoccerRelive
 
-**Letzter Update:** 2026-06-02
-**Letzte Session:** Slice 2 von Issue #15 **komplett** (PySide6-Client: Core,
-GUI, Mount-Monitoring, Packaging + Doku) auf Branch `claude/serene-fermi-pOUQb`
+**Letzter Update:** 2026-06-03
+**Letzte Session:** Einlese-Modell (Label→Tisch) + **GUI-Umbau** auf Branch
+`feat/ingest-label-discipline` (5+1 Commits ahead). Davor: Slice 2 von
+Issue #15 komplett auf `claude/serene-fermi-pOUQb`.
 
 Dieses Dokument ist der **eine Anlaufpunkt** fuer eine neue Claude-Session
 oder einen neuen Mitleser. Wer hier alles liest, hat den Kontext den die
 laufende Arbeit braucht — die volle Chat-Historie ist nicht noetig.
+
+## 0. JETZT GERADE (2026-06-03) — Stand + naechste Schritte
+
+**Wo wir stehen:** Der Upload-Client funktioniert fachlich auf Windows
+(Label→Tisch, .mp4-Whitelist, Volume-Serial-Identitaet, DCIM-Datums-Alarm).
+Heute wurde die **GUI komplett ueberarbeitet** (Branch
+`feat/ingest-label-discipline`, gepusht):
+
+* Step-Indikator oben (1→2→3→4: einstecken → Disziplin → hochladen → freigeben),
+  hebt automatisch den aktuellen Schritt hervor.
+* **Scan laeuft im Hintergrund-Thread** — UI friert beim Einlesen nicht mehr ein.
+* **Live-Fortschrittsbalken pro Karte**: Bytes / Total, **MB/s** (geglaettet)
+  und **ETA** waehrend des Uploads. Gruen = verifiziert, gelb = unterbrochen,
+  rot = Fehler.
+* Modernes Styling (Google-Style-Buttons), fixe Spaltenbreiten,
+  Safe-to-remove als kompaktes Icon.
+* Alle Upload-Client-Tests gruen. (Die 12 roten Tests in `test_restart_flow`,
+  `test_m2_api`, `test_dashboard_api` sind **vorbestehend** und mangels
+  `ffmpeg`-Binary im Container, NICHT durch den GUI-Umbau verursacht —
+  per `git stash` gegengeprueft.)
+
+**Blockierter Upload-Test (muss der Operator zuerst tun):**
+1. `%USERPROFILE%\.sts_upload\state.json` **loeschen** (alte „unterbrochen"-
+   Spur aus dem False-Alarm-Bug der alten `.exe` — sonst zeigt ET01 weiter
+   ⛔ unterbrochen statt ⏳ wartet).
+2. **Neue `.exe` bauen** (PyInstaller, auf Windows) — sie enthaelt erst jetzt
+   den GUI-Umbau + die False-Alarm- und Internal-Disk-Fixes.
+3. `.exe` starten → „SD-Karten einlesen" → ET01 muss ⏳ wartet zeigen.
+4. „Hochladen starten" → Fortschrittsbalken muss sich byte-weise bewegen
+   (MB/s + ETA sichtbar), 0/29 zaehlt langsam hoch (~850 MB pro Datei).
+
+**Danach (wenn Upload-Test gruen):**
+* `feat/ingest-label-discipline` → `wizardly` mergen + Tag `upload-client-v1`
+  fuer die oeffentliche Release (Windows-`.exe`-Build via Release-Workflow).
+* Turniere-Tab: Aktivierung **pro Disziplin** + `expected_cards`-Feld im
+  Anlege-Formular (siehe §4a, noch offen).
+
+**NAS-Voraussetzung:** muss auf `claude/wizardly-goodall-df2er` stehen
+(dort lebt `/api/upload/*`) — siehe Mistake #6.
 
 ## 1. Wo wir stehen
 
@@ -69,33 +109,34 @@ echten Server round-trip-getestet werden kann. Geliefert (414 Tests gruen,
 | **Secret-Rotation deferred** | `.env` auf NAS hat noch alte hartkodierte Werte | niedrig auf LAN, aber technische Schuld |
 | **Luecke A** (DCIM-Auto-Extraktion) | Pipeline-seitig | obsolet wenn Client-Tool (Issue #15) fertig ist |
 
-## 4a. Naechster Slice: UX-Politur des Upload-Tools (Operator-Feedback 2026-06-02)
+## 4a. UX-Politur des Upload-Tools (Operator-Feedback 2026-06-02)
 
-Aus dem ersten echten `.exe`-Test auf Windows. Das Tool funktioniert
-fachlich (Label->Tisch, .mp4-Whitelist, Upload), aber die Oberflaeche ist
-noch eine minimale Wireframe-Schicht. Eigener Slice:
+Aus dem ersten echten `.exe`-Test auf Windows. Status pro Punkt:
 
-* **Gefuehrte, laientaugliche Oberflaeche** + sauberes/professionelles
-  Styling: Leerzustand mit Anleitung, eindeutige naechste Aktion
-  hervorgehoben, deaktivierte Buttons mit Erklaerung statt Raetselraten.
-* **Scan im Hintergrund**: das Einlesen laeuft aktuell im UI-Thread, das
-  Fenster friert beim Scannen kurz ein (bei vielen Karten spuerbar) -> in
-  einen Worker-Thread auslagern.
-* **Live-Fortschritt**: echter Fortschrittsbalken (Dateien UND Bytes) +
-  Tempo (MB/s) + Restzeit (ETA). Wichtig: **byte-genau INNERHALB einer
-  Datei** (eine Datei = ein ~850-MB-Request; heute bewegt sich minutenlang
-  nichts). Zaehler um den Upload-Stream, ressourcenschonend.
-* **Tabellen-Layout** (kleiner Quick-Fix, kann vorgezogen werden):
-  - Spalte „Fortschritt" viel zu breit (einzige Stretch-Spalte).
-  - Spaltenbreiten nicht anpassbar -> interaktives Resizing aktivieren.
-  - Spalte „Entfernen" ganz rechts abgeschnitten/unlesbar -> genug Breite
-    (langer Text „sicher entfernbar" / „Nicht entfernen…").
-* **Turniere-Tab: Aktivierung pro Disziplin.** Heute zeigt „Alle Turniere"
-  nur Doppel (`firstAvailableDiscipline` in `web/static/app.js`), und der
-  „aktivieren"-Button aktiviert nur fuer diese eine Disziplin -> Einzel
-  laesst sich im GUI nicht aktivieren (nur via API). UI muss pro Disziplin
-  Status zeigen + Auswahl bieten. Erwartete Kartenzahl (`expected_cards_*`)
-  fehlt im Anlegen-Formular ganz -> ergaenzen.
+* ✅ **Gefuehrte, laientaugliche Oberflaeche** + Styling — Step-Indikator
+  (1→2→3→4), modernes Button-Styling, deaktivierte Release-Buttons solange
+  nichts verifiziert ist. (2026-06-03)
+* ✅ **Scan im Hintergrund** — laeuft jetzt in einem Daemon-Thread
+  (`MainWindow._start_scan_thread`), UI friert nicht mehr ein. (2026-06-03)
+* ✅ **Live-Fortschritt** — `QProgressBar` pro Karte mit Bytes/Total, MB/s
+  (exponentiell geglaettet) und ETA waehrend `uploading`. Treibt sich aus
+  `CardRow.sent_bytes/expected_bytes` (roh aus `CardProgress`). (2026-06-03)
+  - ⚠ **Noch offen / zu verifizieren**: ob sich der Balken **byte-genau
+    INNERHALB einer Datei** bewegt. Aktuell speist `received_bytes` aus dem
+    Engine-Stand; eine ~850-MB-Datei ist EIN Request. Falls der Balken
+    waehrend einer einzelnen Datei minutenlang stillsteht, muss ein
+    Stream-Zaehler **um den Upload-Stream** (im `upload_engine`/`api_client`,
+    pro gesendetem Chunk-Block) `received_bytes` live hochzaehlen. Beim
+    Windows-Test pruefen.
+* ✅ **Tabellen-Layout** — fixe Spaltenbreiten, „Fortschritt" ist die
+  Stretch-Spalte (Balken), Safe-to-remove als 32-px-Icon statt langem Text.
+  (2026-06-03)
+* ⬜ **Turniere-Tab: Aktivierung pro Disziplin.** NOCH OFFEN. Heute zeigt
+  „Alle Turniere" nur Doppel (`firstAvailableDiscipline` in
+  `web/static/app.js`), und der „aktivieren"-Button aktiviert nur fuer diese
+  eine Disziplin -> Einzel laesst sich im GUI nicht aktivieren (nur via API).
+  UI muss pro Disziplin Status zeigen + Auswahl bieten. Erwartete Kartenzahl
+  (`expected_cards_*`) fehlt im Anlegen-Formular ganz -> ergaenzen.
 
 Detail-Design + bisherige Umsetzung: [`UPLOAD_CLIENT_INGEST.md`](UPLOAD_CLIENT_INGEST.md).
 
