@@ -931,7 +931,15 @@ def _serve(app: Flask, host: str, port: int) -> None:
         return
     print(f"[web] waitress serving on http://{host}:{port}",
           file=sys.stderr)
-    waitress_serve(app, host=host, port=port)
+    # One uploaded MP4 == one request body; tournament files run to ~3 GB,
+    # past waitress's 1 GB default max_request_body_size (which rejects the
+    # chunk with HTTP 413). Allow large bodies and give a slow large-file
+    # upload room before the channel idle-timeout fires.
+    waitress_serve(
+        app, host=host, port=port,
+        max_request_body_size=32 * 1024 ** 3,  # 32 GB headroom per file
+        channel_timeout=600,                    # 10 min for a big upload
+    )
 
 
 def _main(argv: List[str]) -> int:
