@@ -685,16 +685,20 @@ class MainWindow(QMainWindow):
     def _format_progress(self, row) -> Tuple[int, str]:
         """Return (percent 0-100, label text) for the progress bar."""
         if row.state == CLIENT_VERIFIED:
-            return 100, row.detail
+            return 100, f"100% · {row.detail}"
         if row.state == CLIENT_RELEASED:
-            return 100, row.detail
+            return 100, f"100% · {row.detail}"
         if row.expected_bytes <= 0 or row.state != CLIENT_UPLOADING:
             return 0, row.detail
 
         pct = min(int(100 * row.sent_bytes / row.expected_bytes), 100)
         speed = self._compute_speed(row.key, row.sent_bytes)
         remaining = row.expected_bytes - row.sent_bytes
-        parts = [f"{_human_bytes(row.sent_bytes)} / {_human_bytes(row.expected_bytes)}"]
+        # Lead with the percentage so it is the first thing read on the bar.
+        parts = [
+            f"{pct}%",
+            f"{_human_bytes(row.sent_bytes)} / {_human_bytes(row.expected_bytes)}",
+        ]
         if speed and speed > 0:
             parts.append(f"{_human_bytes(int(speed))}/s")
             eta_s = remaining / speed
@@ -704,7 +708,7 @@ class MainWindow(QMainWindow):
                 parts.append(f"~{int(eta_s / 60)}min")
             else:
                 parts.append(f"~{eta_s / 3600:.1f}h")
-        return pct, "  ".join(parts)
+        return pct, "  ·  ".join(parts)
 
     def _current_step(self, snap) -> int:
         """Determine which step (1-4) the operator is currently on."""
