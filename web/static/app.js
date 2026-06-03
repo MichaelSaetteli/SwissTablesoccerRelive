@@ -168,16 +168,25 @@
     const runs = payload.runs || [];
     if (runs.length === 0) {
       tbody.innerHTML =
-        '<tr><td colspan="11" class="empty">Noch keine Runs.</td></tr>';
+        '<tr><td colspan="12" class="empty">Noch keine Runs.</td></tr>';
       return;
     }
     const phaseDur = (run, name) => {
       const p = (run.phases || []).find(x => x.phase === name);
       return p ? p.duration_s.toFixed(2) + 's' : '--';
     };
+    const fmtTime = (iso) => {
+      if (!iso) return '--';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return escapeHtml(iso);
+      const p = (n) => String(n).padStart(2, '0');
+      return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} `
+           + `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    };
     tbody.innerHTML = runs.map(r => `
       <tr class="run-${escapeHtml(r.state)}" data-run-id="${r.id}">
         <td><input type="checkbox" class="bulk-select" data-run-id="${r.id}"></td>
+        <td class="run-time">${fmtTime(r.started_at)}</td>
         <td>${escapeHtml(r.folder_name)}</td>
         <td>${escapeHtml(r.state)}</td>
         <td><input type="number" class="prio-input" data-run-id="${r.id}"
