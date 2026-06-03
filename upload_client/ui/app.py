@@ -22,8 +22,13 @@ from typing import Dict, Optional, Set
 from PySide6.QtCore import QLockFile
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from upload_client.api_client import ApiError
+from upload_client.api_client import ApiClient, ApiError
 from upload_client.card_scanner import scan_mounts
+from upload_client.credentials import (
+    clear_credentials,
+    load_credentials,
+    save_credentials,
+)
 from upload_client.mount_watcher import MountWatcher
 from upload_client.mounts import discover_card_roots
 from upload_client.state_store import StateStore
@@ -35,6 +40,23 @@ from upload_client.upload_manager import UploadManager
 STATE_FILE = Path.home() / ".sts_upload" / "state.json"
 LOCK_FILE = Path.home() / ".sts_upload" / "sts_upload.lock"
 LOG_FILE = Path.home() / ".sts_upload" / "sts_upload.log"
+CRED_FILE = Path.home() / ".sts_upload" / "credentials.json"
+
+
+def _auto_login() -> Optional[ApiClient]:
+    """Log in from saved credentials, or return None to fall back to dialog."""
+    creds = load_credentials(CRED_FILE)
+    if creds is None:
+        return None
+    api = ApiClient(creds["server"])
+    try:
+        api.login(creds["username"], creds["password"])
+    except ApiError:
+        logging.getLogger("sts_upload").info(
+            "Auto-Login fehlgeschlagen - zeige Login-Dialog"
+        )
+        return None
+    return api
 
 
 def setup_logging(path: Path = LOG_FILE) -> None:
@@ -151,10 +173,23 @@ def run(argv=None) -> int:
     # Keep the lock alive for the whole session (GC would release it).
     app._sts_instance_lock = lock  # type: ignore[attr-defined]
 
-    login = LoginDialog()
-    if login.exec() != LoginDialog.Accepted or login.api is None:
-        return 0
-    api = login.api
+    # Auto-login from saved credentials (skips the dialog entirely for the
+    # 3-5 operators who chose "Angemeldet bleiben"). Falls back to the dialog
+    # if nothing is saved or the saved login no longer works (e.g. rotated
+    # password / server down), pre-filling it so they only fix what changed.
+    api = _auto_login()
+    if api is None:
+        login = LoginDialog(prefill=load_credentials(CRED_FILE))
+        if login.exec() != LoginDialog.Accepted or login.api is None:
+            return 0
+        api = login.api
+        if login.remember:
+            save_credentials(
+                CRED_FILE, server=login.server,
+                username=login.username, password=login.password,
+            )
+        else:
+            clear_credentials(CRED_FILE)
 
     try:
         active = api.active_tournament()
