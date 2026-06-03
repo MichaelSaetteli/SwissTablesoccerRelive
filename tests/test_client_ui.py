@@ -52,6 +52,9 @@ class StubManager:
     def start_all(self, *, auto_release) -> None:
         self.calls.append(("start", auto_release))
 
+    def start_card(self, key, *, auto_release) -> None:
+        self.calls.append(("start_card", key, auto_release))
+
     def release_verified(self):
         self.calls.append(("release_all",))
         return []
@@ -185,23 +188,78 @@ def test_fmt_hms_formats_elapsed():
     assert MainWindow._fmt_hms(3661) == "1:01:01"
 
 
-def test_duration_column_runs_then_freezes(qapp):
+def test_duration_column_from_timestamps(qapp):
+    import time as _t
+
     from upload_client.ui.main_window import _COL_DURATION
     from upload_client.upload_engine import CLIENT_UPLOADING
 
+    now = _t.time()
+    # Uploading, started 65 s ago, not finished -> live clock counts to now.
+    up = _row("u1", "ET01", CLIENT_UPLOADING, started_at=now - 65)
+    win = MainWindow(StubManager(_snapshot([up])), scan_fn=lambda: {},
+                     poll_ms=10_000)
+    idx = win._row_of["u1"]
+    assert win.table.item(idx, _COL_DURATION).text() != ""
+
+    # Verified with start+finish 90 s apart -> frozen "1:30".
+    done = _row("u2", "ET02", CLIENT_VERIFIED,
+                started_at=now - 90, finished_at=now)
+    win2 = MainWindow(StubManager(_snapshot([done])), scan_fn=lambda: {},
+                      poll_ms=10_000)
+    idx2 = win2._row_of["u2"]
+    assert win2.table.item(idx2, _COL_DURATION).text() == "1:30"
+
+    # No start stamp (pending) -> empty.
+    assert win._duration_text(_row("u3", "ET03", CLIENT_VERIFIED)) == ""
+
+
+def test_overall_bar_shows_aggregate_and_hides_when_empty(qapp):
+    from upload_client.upload_engine import CLIENT_UPLOADING
+    up = _row("u1", "ET01", CLIENT_UPLOADING, sent_bytes=500, expected_bytes=1000)
+    win = MainWindow(StubManager(_snapshot([up])), scan_fn=lambda: {},
+                     poll_ms=10_000)
+    assert win.overall_bar.isHidden() is False
+    assert win.overall_bar.value() == 50  # 500 / 1000
+
+    # No cards -> overall bar hidden.
+    win2 = MainWindow(StubManager(ManagerSnapshot(rows=[], summaries=[])),
+                      scan_fn=lambda: {}, poll_ms=10_000)
+    assert win2.overall_bar.isHidden() is True
+
+
+def test_start_button_disabled_when_nothing_to_do(qapp):
+    from upload_client.upload_engine import CLIENT_PENDING
+    # A pending card -> start enabled.
+    win = MainWindow(StubManager(_snapshot([_row("u1", "ET01", CLIENT_PENDING)])),
+                     scan_fn=lambda: {}, poll_ms=10_000)
+    assert win.btn_start.isEnabled() is True
+    # All verified -> nothing to start.
+    win2 = MainWindow(StubManager(_snapshot([_row("u1", "ET01", CLIENT_VERIFIED)])),
+                      scan_fn=lambda: {}, poll_ms=10_000)
+    assert win2.btn_start.isEnabled() is False
+
+
+def test_retry_button_calls_start_card(qapp):
+    from upload_client.upload_engine import CLIENT_FAILED
+    mgr = StubManager(_snapshot([_row("u1", "ET01", CLIENT_FAILED, is_error=True)]))
+    win = MainWindow(mgr, scan_fn=lambda: {}, poll_ms=10_000)
+    win.on_retry_card("u1")
+    assert any(c[0] == "start_card" and c[1] == "u1" for c in mgr.calls)
+
+
+def test_close_guard_respects_decline(qapp, monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QMessageBox
+    from upload_client.upload_engine import CLIENT_UPLOADING
     mgr = StubManager(_snapshot([_row("u1", "ET01", CLIENT_UPLOADING)]))
     win = MainWindow(mgr, scan_fn=lambda: {}, poll_ms=10_000)
-    idx = win._row_of["u1"]
-    # Uploading -> a running clock (mm:ss) is shown and the start is recorded.
-    assert win.table.item(idx, _COL_DURATION).text() != ""
-    assert "u1" in win._dur_start
-    assert "u1" not in win._dur_end
-
-    # Transition to verified -> the duration freezes (end time recorded).
-    mgr._snap = _snapshot([_row("u1", "ET01", CLIENT_VERIFIED)])
-    win.refresh()
-    assert "u1" in win._dur_end
-    assert win.table.item(idx, _COL_DURATION).text() != ""
+    # Decline the "really close?" prompt -> event ignored, no shutdown.
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    ev = QCloseEvent()
+    win.closeEvent(ev)
+    assert ev.isAccepted() is False
+    assert not any(c[0] == "shutdown" for c in mgr.calls)
 
 
 def test_select_all_toggles_every_checkbox(qapp):

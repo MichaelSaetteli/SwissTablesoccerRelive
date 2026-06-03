@@ -139,6 +139,10 @@ class CardRow:
     sent_bytes: int = 0
     expected_bytes: int = 0
     sent_files: int = 0
+    # Elapsed-time anchors (epoch seconds), persisted by the engine so the
+    # "Dauer" column is correct even after a resume.
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
 
 
 def row_for_progress(p: CardProgress) -> CardRow:
@@ -173,6 +177,8 @@ def row_for_progress(p: CardProgress) -> CardRow:
         sent_bytes=p.received_bytes,
         expected_bytes=p.expected_bytes,
         sent_files=p.sent_files,
+        started_at=p.started_at,
+        finished_at=p.finished_at,
     )
 
 

@@ -86,6 +86,10 @@ class CardProgress:
     received_bytes: int = 0
     error: Optional[str] = None
     updated_at: Optional[str] = None
+    # Wall-clock epoch seconds; persisted so the GUI "Dauer" survives a resume
+    # (tool restart mid-upload) instead of restarting from zero.
+    started_at: Optional[float] = None    # first time the card began uploading
+    finished_at: Optional[float] = None   # first time it reached verified/released
 
     @property
     def sent_files(self) -> int:
@@ -451,6 +455,15 @@ class UploadEngine:
 
     def _save(self, progress: CardProgress, event: str) -> None:
         progress.updated_at = _now()
+        # Stamp the elapsed-time anchors once, on the first transition into
+        # each phase, so the GUI duration clock is correct across a resume.
+        if progress.state == CLIENT_UPLOADING and progress.started_at is None:
+            progress.started_at = time.time()
+        if (
+            progress.state in (CLIENT_VERIFIED, CLIENT_RELEASED)
+            and progress.finished_at is None
+        ):
+            progress.finished_at = time.time()
         logger.info(
             "Card %s: %s (state=%s, %d/%d files, server_id=%s)",
             progress.table, event, progress.state,

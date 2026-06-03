@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -276,6 +277,7 @@ class MainWindow(QMainWindow):
         self._row_of: Dict[str, int] = {}
         self._disc_combos: Dict[str, QComboBox] = {}
         self._prog_bars: Dict[str, QProgressBar] = {}
+        self._safe_btns: Dict[str, QToolButton] = {}  # state icon / retry button
         self._rows_by_key: Dict[str, object] = {}
 
         # Background scan state (written by worker, read by main thread)
@@ -288,11 +290,9 @@ class MainWindow(QMainWindow):
         self._speed_data: Dict[str, Tuple[float, int]] = {}
         self._speed_cache: Dict[str, float] = {}  # key -> bytes/s (smoothed)
 
-        # Per-card duration: wall-clock start when the card first uploads, and
-        # the frozen end time once it is verified/released. So the "Dauer"
-        # column runs live while uploading and then stops at the final value.
-        self._dur_start: Dict[str, float] = {}   # key -> time.time() at start
-        self._dur_end: Dict[str, float] = {}     # key -> time.time() when done
+        # Cache of the last progress-bar chunk colour per row, so we only
+        # re-apply the (expensive) stylesheet when the colour actually changes.
+        self._bar_color: Dict[str, str] = {}
 
         title = "STS-Upload"
         if tournament_name:
@@ -392,6 +392,15 @@ class MainWindow(QMainWindow):
         self.lbl_warn.setWordWrap(True)
         self.lbl_warn.setVisible(False)
         root.addWidget(self.lbl_warn)
+
+        # Overall progress across ALL cards (the "how long until everything is
+        # done" bar). Hidden until there is something to upload.
+        self.overall_bar = QProgressBar()
+        self.overall_bar.setRange(0, 100)
+        self.overall_bar.setTextVisible(True)
+        self.overall_bar.setObjectName("overall")
+        self.overall_bar.setVisible(False)
+        root.addWidget(self.overall_bar)
 
         # Summary line
         self.lbl_summary = QLabel("")
@@ -555,6 +564,13 @@ class MainWindow(QMainWindow):
         self._manager.start_all(auto_release=self.chk_auto.isChecked())
         self.refresh()
 
+    def on_retry_card(self, key: str) -> None:
+        """Re-upload a single failed/interrupted card (per-row ↻ button)."""
+        start_card = getattr(self._manager, "start_card", None)
+        if callable(start_card):
+            start_card(key, auto_release=self.chk_auto.isChecked())
+        self.refresh()
+
     def on_release_all(self) -> None:
         self._manager.release_verified()
         self.refresh()
@@ -607,11 +623,11 @@ class MainWindow(QMainWindow):
         self._row_of.clear()
         self._disc_combos.clear()
         self._prog_bars.clear()
+        self._safe_btns.clear()
         self._rows_by_key.clear()
         self._speed_data.clear()
         self._speed_cache.clear()
-        self._dur_start.clear()
-        self._dur_end.clear()
+        self._bar_color.clear()
         self.lbl_hint.setVisible(False)
         self.refresh()
 
@@ -665,22 +681,17 @@ class MainWindow(QMainWindow):
         return f"{m}:{s:02d}"
 
     def _duration_text(self, row) -> str:
-        """Elapsed time for a card: live while uploading, frozen when done."""
-        key = row.key
-        done_states = (CLIENT_VERIFIED, CLIENT_RELEASED)
-        if row.state == CLIENT_UPLOADING:
-            # Start the clock the first time we see the card uploading.
-            self._dur_start.setdefault(key, time.time())
-            self._dur_end.pop(key, None)
-            return self._fmt_hms(time.time() - self._dur_start[key])
-        if row.state in done_states and key in self._dur_start:
-            # Freeze at the moment it first reached a done state.
-            end = self._dur_end.setdefault(key, time.time())
-            return self._fmt_hms(end - self._dur_start[key])
-        # Pending / interrupted / failed / never-started -> no running clock.
-        if key in self._dur_start and key in self._dur_end:
-            return self._fmt_hms(self._dur_end[key] - self._dur_start[key])
-        return ""
+        """Elapsed time for a card from the engine-persisted timestamps.
+
+        Runs live while uploading (no finish stamp yet -> count to now) and
+        freezes at the final value once verified/released. Survives a resume
+        because the anchors come from the persisted ``CardProgress``.
+        """
+        start = getattr(row, "started_at", None)
+        if not start:
+            return ""
+        end = getattr(row, "finished_at", None) or time.time()
+        return self._fmt_hms(end - start)
 
     def _format_progress(self, row) -> Tuple[int, str]:
         """Return (percent 0-100, label text) for the progress bar."""
@@ -771,10 +782,54 @@ class MainWindow(QMainWindow):
         # Step indicator
         self._step_bar.set_step(self._current_step(snap))
 
-        # Button enable/disable
+        # Overall progress across all cards.
+        self._render_overall(snap)
+
+        # Button enable/disable — guide the operator: "Hochladen starten" is
+        # only active when something can actually make progress.
         any_verified = any(r.state == CLIENT_VERIFIED for r in snap.rows)
+        startable = any(
+            r.state in (CLIENT_PENDING, CLIENT_INTERRUPTED, CLIENT_FAILED)
+            for r in snap.rows
+        )
+        self.btn_start.setEnabled(startable)
         self.btn_release_all.setEnabled(any_verified)
         self.btn_release_sel.setEnabled(any_verified)
+
+    def _render_overall(self, snap) -> None:
+        """Aggregate bar over all (non-locked) cards: count, bytes, speed, ETA."""
+        cards = [r for r in snap.rows if not r.is_error]
+        total_bytes = sum(r.expected_bytes for r in cards)
+        if not cards or total_bytes <= 0:
+            self.overall_bar.setVisible(False)
+            return
+        sent_bytes = sum(r.sent_bytes for r in cards)
+        done = sum(
+            1 for r in cards if r.state in (CLIENT_VERIFIED, CLIENT_RELEASED)
+        )
+        pct = min(int(100 * sent_bytes / total_bytes), 100)
+        parts = [
+            f"{done} / {len(cards)} Karten",
+            f"{_human_bytes(sent_bytes)} / {_human_bytes(total_bytes)}",
+        ]
+        # Aggregate live speed = sum of the per-card smoothed speeds currently
+        # uploading (the _speed_cache was refreshed in the row loop above).
+        speed = sum(
+            self._speed_cache.get(r.key, 0.0)
+            for r in cards if r.state == CLIENT_UPLOADING
+        )
+        if speed > 0:
+            parts.append(f"Σ {_human_bytes(int(speed))}/s")
+            eta = (total_bytes - sent_bytes) / speed
+            if eta < 60:
+                parts.append(f"Rest ~{int(eta)}s")
+            elif eta < 3600:
+                parts.append(f"Rest ~{int(eta / 60)}min")
+            else:
+                parts.append(f"Rest ~{eta / 3600:.1f}h")
+        self.overall_bar.setValue(pct)
+        self.overall_bar.setFormat(f"{pct}%  ·  " + "  ·  ".join(parts))
+        self.overall_bar.setVisible(True)
 
     def _upsert_row(self, row) -> None:
         idx = self._row_of.get(row.key)
@@ -791,9 +846,19 @@ class MainWindow(QMainWindow):
             self.table.setItem(idx, _COL_SEL, sel)
 
             # Plain-text cells
-            for col in (_COL_TABLE, _COL_DURATION, _COL_STATUS, _COL_DATE,
-                        _COL_SAFE):
+            for col in (_COL_TABLE, _COL_DURATION, _COL_STATUS, _COL_DATE):
                 self.table.setItem(idx, col, QTableWidgetItem(""))
+
+            # Action/state cell: a flat button that doubles as the
+            # safe-to-remove indicator (🔌 / ⛔, disabled) and, for a
+            # failed/interrupted card, a clickable "↻" retry.
+            safe_btn = QToolButton()
+            safe_btn.setAutoRaise(True)
+            safe_btn.clicked.connect(
+                lambda _=False, k=row.key: self.on_retry_card(k)
+            )
+            self._safe_btns[row.key] = safe_btn
+            self.table.setCellWidget(idx, _COL_SAFE, safe_btn)
 
             # Discipline dropdown
             combo = QComboBox()
@@ -828,19 +893,27 @@ class MainWindow(QMainWindow):
         combo.setEnabled(row.editable_discipline)
         combo.blockSignals(False)
 
-        # Progress bar
+        # Progress bar. Only re-apply the stylesheet when the colour category
+        # changes - setStyleSheet forces a style re-polish, wasteful every tick
+        # across many parallel uploads.
         bar = self._prog_bars[row.key]
         pct, label = self._format_progress(row)
         bar.setValue(pct)
         bar.setFormat(label)
-        if row.state == CLIENT_VERIFIED or row.state == CLIENT_RELEASED:
-            bar.setStyleSheet("QProgressBar::chunk { background: #34a853; border-radius: 3px; }")
+        if row.state in (CLIENT_VERIFIED, CLIENT_RELEASED):
+            color = "#34a853"
         elif row.state == CLIENT_FAILED or row.is_error:
-            bar.setStyleSheet("QProgressBar::chunk { background: #ea4335; border-radius: 3px; }")
+            color = "#ea4335"
         elif row.state == CLIENT_INTERRUPTED:
-            bar.setStyleSheet("QProgressBar::chunk { background: #fbbc04; border-radius: 3px; }")
+            color = "#fbbc04"
         else:
-            bar.setStyleSheet("")  # default blue
+            color = ""  # default blue
+        if self._bar_color.get(row.key) != color:
+            self._bar_color[row.key] = color
+            bar.setStyleSheet(
+                f"QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}"
+                if color else ""
+            )
 
         # Status badge
         status_item = self.table.item(idx, _COL_STATUS)
@@ -860,18 +933,25 @@ class MainWindow(QMainWindow):
         date_item.setText(date_text)
         date_item.setTextAlignment(Qt.AlignCenter)
 
-        # Safe-to-remove icon (compact)
-        safe_item = self.table.item(idx, _COL_SAFE)
-        if row.state in (CLIENT_VERIFIED, CLIENT_RELEASED):
-            safe_item.setText("🔌")
-            safe_item.setToolTip("Sicher entfernbar")
+        # Action/state cell: indicator when not retryable, retry button when
+        # the card failed or was interrupted.
+        safe_btn = self._safe_btns[row.key]
+        if row.state in (CLIENT_FAILED, CLIENT_INTERRUPTED):
+            safe_btn.setText("↻")
+            safe_btn.setEnabled(True)
+            safe_btn.setToolTip("Diese Karte erneut hochladen")
+        elif row.state in (CLIENT_VERIFIED, CLIENT_RELEASED):
+            safe_btn.setText("🔌")
+            safe_btn.setEnabled(False)
+            safe_btn.setToolTip("Sicher entfernbar")
         elif row.state == CLIENT_UPLOADING:
-            safe_item.setText("⛔")
-            safe_item.setToolTip("Nicht entfernen — Upload läuft")
+            safe_btn.setText("⛔")
+            safe_btn.setEnabled(False)
+            safe_btn.setToolTip("Nicht entfernen — Upload läuft")
         else:
-            safe_item.setText("")
-            safe_item.setToolTip("")
-        safe_item.setTextAlignment(Qt.AlignCenter)
+            safe_btn.setText("")
+            safe_btn.setEnabled(False)
+            safe_btn.setToolTip("")
 
         # Row background
         if row.is_error:
@@ -887,13 +967,33 @@ class MainWindow(QMainWindow):
         else:
             bg = QColor(Qt.white)
         for col in (_COL_SEL, _COL_TABLE, _COL_DURATION, _COL_STATUS,
-                    _COL_DATE, _COL_SAFE):
+                    _COL_DATE):
             cell = self.table.item(idx, col)
             if cell is not None:
                 cell.setBackground(bg)
-        bar.setProperty("bg_color", bg.name())
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        # Guard against losing a long upload to an accidental window close.
+        try:
+            uploading = any(
+                r.state == CLIENT_UPLOADING
+                for r in self._manager.snapshot().rows
+            )
+        except Exception:  # noqa: BLE001 - never block close on a snapshot error
+            uploading = False
+        if uploading:
+            confirm = QMessageBox.question(
+                self,
+                "Upload läuft",
+                "Es läuft noch mindestens ein Upload.\n\n"
+                "Wirklich schliessen? Der laufende Upload wird unterbrochen "
+                "(beim nächsten Start setzt er fort).",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                event.ignore()
+                return
         self._timer.stop()
         shutdown = getattr(self._manager, "shutdown", None)
         if callable(shutdown):
