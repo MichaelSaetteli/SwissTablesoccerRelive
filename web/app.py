@@ -811,6 +811,14 @@ def create_app(
     )
 
     app.config["PIPELINE_CONFIGS"] = dict(configs)
+    # Large MP4 uploads (one ~3 GB file per multipart request). Werkzeug 3.1
+    # caps a multipart body at max_form_memory_size (500 kB) when
+    # MAX_CONTENT_LENGTH is unset, which rejects the file with HTTP 413; raise
+    # both so the upload chunk endpoint accepts large bodies. (Waitress caps
+    # the socket read separately - see _serve.)
+    _MAX_UPLOAD = 32 * 1024 ** 3  # 32 GB headroom per request
+    app.config["MAX_CONTENT_LENGTH"] = _MAX_UPLOAD
+    app.config["MAX_FORM_MEMORY_SIZE"] = _MAX_UPLOAD
     app.config["WEB_USERNAME"] = (
         username or os.environ.get("WEB_USERNAME", DEFAULT_USERNAME)
     )
