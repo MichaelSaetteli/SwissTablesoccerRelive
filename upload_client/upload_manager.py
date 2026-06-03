@@ -16,6 +16,7 @@ one, so it doubles as a "retry / resume everything" action.
 
 from __future__ import annotations
 
+import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -137,6 +138,14 @@ class UploadManager:
         except UploadInterrupted:
             # State is already persisted as 'interrupted'; the UI shows it
             # and the operator (or a re-scan + start) can resume.
+            return None
+        except Exception:  # noqa: BLE001 - a pool exception would vanish silently
+            # Never let an unexpected error disappear into the Future; log it
+            # so the .exe (no console) still leaves a diagnosable trail.
+            logging.getLogger("sts_upload.manager").exception(
+                "Unerwarteter Fehler beim Upload von Tisch %s",
+                getattr(marker, "table", "?"),
+            )
             return None
 
     def release_verified(self) -> List[CardProgress]:

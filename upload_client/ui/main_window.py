@@ -697,12 +697,21 @@ class MainWindow(QMainWindow):
             if snap.summaries else ""
         )
 
-        # Interrupted warning banner
-        interrupted = [r.table for r in snap.rows if r.state == CLIENT_INTERRUPTED]
+        # Interrupted warning banner — show the REAL cause per card, not a
+        # blanket "card removed" (which hid server-side rejections).
+        interrupted = [r for r in snap.rows if r.state == CLIENT_INTERRUPTED]
         if interrupted:
+            lines = []
+            for r in sorted(interrupted, key=lambda r: r.table):
+                if r.error_detail:
+                    lines.append(f"Karte {r.table}: {r.error_detail}")
+                else:
+                    lines.append(
+                        f"Karte {r.table}: entfernt — bitte wieder einstecken."
+                    )
             self.lbl_warn.setText(
-                "⚠  Karte(n) " + ", ".join(sorted(interrupted))
-                + " entfernt — bitte wieder einstecken. Upload wird fortgesetzt."
+                "⚠  Upload unterbrochen:\n" + "\n".join(lines)
+                + "\n\nDetails im Log: %USERPROFILE%\\.sts_upload\\sts_upload.log"
             )
             self.lbl_warn.setVisible(True)
         else:

@@ -12,8 +12,10 @@ tournament per discipline. No pre-written marker is required.
 
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import dataclass, field
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, Optional, Set
 
@@ -32,6 +34,29 @@ from upload_client.upload_manager import UploadManager
 
 STATE_FILE = Path.home() / ".sts_upload" / "state.json"
 LOCK_FILE = Path.home() / ".sts_upload" / "sts_upload.lock"
+LOG_FILE = Path.home() / ".sts_upload" / "sts_upload.log"
+
+
+def setup_logging(path: Path = LOG_FILE) -> None:
+    """Write a diagnostic log next to the state file.
+
+    The .exe is windowed (no console), so without this an upload failure's
+    real cause is invisible. The log captures the per-card step trail and the
+    full exception when a card is interrupted (engine logs under
+    ``sts_upload.*``). Rotates so it never grows without bound.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        str(path), maxBytes=1_000_000, backupCount=3, encoding="utf-8",
+    )
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    root = logging.getLogger("sts_upload")
+    root.setLevel(logging.INFO)
+    # Avoid stacking duplicate handlers if run() is called more than once.
+    if not any(isinstance(h, RotatingFileHandler) for h in root.handlers):
+        root.addHandler(handler)
 
 
 def acquire_single_instance_lock(path: Path) -> Optional[QLockFile]:
@@ -107,6 +132,8 @@ def _make_scan_fn(active_tournaments: Dict[str, dict], state: IngestState):
 
 
 def run(argv=None) -> int:
+    setup_logging()
+    logging.getLogger("sts_upload").info("STS-Upload gestartet")
     app = QApplication.instance() or QApplication(argv or sys.argv)
 
     # Single-instance guard: refuse a second window with a clear message.

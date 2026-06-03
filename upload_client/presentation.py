@@ -147,6 +147,11 @@ def row_for_progress(p: CardProgress) -> CardRow:
         detail = friendly_error(p.table, p.error)
     elif p.state == CLIENT_RELEASED:
         detail = "Pipeline laeuft"
+    elif p.state == CLIENT_INTERRUPTED:
+        # Show the real cause, not a blanket "card removed". A genuine pull
+        # and a server-side rejection both land here; the operator (and the
+        # log) deserve the actual reason.
+        detail = p.error or "unterbrochen"
     else:
         detail = (
             f"{p.sent_files}/{p.expected_files} Dateien"
@@ -163,7 +168,7 @@ def row_for_progress(p: CardProgress) -> CardRow:
         can_release=can_release(p.state),
         release_tooltip=release_tooltip(p.state),
         is_error=p.state == CLIENT_FAILED,
-        error_detail=p.error if p.state == CLIENT_FAILED else None,
+        error_detail=p.error if p.state in (CLIENT_FAILED, CLIENT_INTERRUPTED) else None,
         card_uuid=p.card_uuid,
         sent_bytes=p.received_bytes,
         expected_bytes=p.expected_bytes,

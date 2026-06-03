@@ -11,6 +11,41 @@ laufende Arbeit braucht — die volle Chat-Historie ist nicht noetig.
 
 ## 0. JETZT GERADE (2026-06-03) — Stand + naechste Schritte
 
+### ⚠⚠ Upload bricht WEITERHIN sofort auf „unterbrochen" ab — Diagnose eingebaut
+
+Trotz Debounce + Einzelinstanz-Sperre bricht der Upload beim Klick auf
+„Hochladen starten" **sofort** ab (0 Fortschritt). Wichtige Erkenntnis aus
+dem Code: „unterbrochen" kommt aus **zwei** Quellen, die das UI bisher beide
+als „Karte entfernt" zeigte und damit den wahren Grund verbarg:
+1. `UploadManager.handle_removed` → `mark_interrupted` (Watcher meint Karte
+   weg). Setzt **kein** `progress.error`.
+2. `UploadEngine._interrupt` (Transport-/Server-Fehler in `start_upload` /
+   chunk / finish). Setzt `progress.error` = echter Fehler.
+
+Ein sofortiger Abbruch mit 0 Fortschritt deutet auf (2) — den **Server lehnt
+`start_upload` ab** —, NICHT auf den Watcher. Wahrscheinlichster Grund:
+stale Server-Zustand fuer ET01 aus den frueheren Testlaeufen (card_uuid
+`vol-SERIAL` existiert noch / Staging-Dir liegt noch, `mkdir(exist_ok=False)`
+in `upload_staging/service.py:95`). Lokales „Zuruecksetzen" loescht nur die
+Client-`state.json`, **nicht** den Server.
+
+**Diagnose committet (damit wir aufhoeren zu raten):**
+* Log-Datei `~/.sts_upload/sts_upload.log` (RotatingFileHandler) mit
+  Per-Schritt-Trail + voller Exception bei Interrupt (`upload_engine`
+  loggt unter `sts_upload.*`, Setup in `ui/app.py::setup_logging`).
+* UI zeigt bei „unterbrochen" jetzt den **echten** `progress.error` statt
+  pauschal „entfernt"; das Warn-Banner listet pro Karte den Grund + Pfad zum
+  Log. **Damit unterscheidet das Banner sofort Watcher (kein error_detail →
+  „entfernt") von Server-Fehler (error_detail gesetzt → echter Text).**
+* `UploadManager._run` loggt jetzt auch unerwartete Exceptions (sonst
+  verschwinden sie still im ThreadPool-Future).
+
+**Naechster Schritt:** neue test-build-`.exe` ziehen, Upload starten, dann
+den **echten Fehlertext** (Banner ODER Log) ablesen. Erst damit laesst sich
+die wahre Ursache fixen. Falls es der stale Server-Zustand ist: ET01-Karte
+serverseitig canceln/aufraeumen ODER pro Testlauf einen neuen Tisch nehmen
+(ET90+), siehe §8.
+
 ### ⚠ Befund aus dem Windows-Upload-Test: False-Alarm-Bug RICHTIG gefixt
 
 Beim echten Test brach der Upload **beim Klick auf „Hochladen starten"**

@@ -24,6 +24,7 @@ HTTP session.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, List, Optional
@@ -44,6 +45,8 @@ CLIENT_CANCELLED = "cancelled"
 
 # States in which the card is safe to physically remove (§6a Safe-to-remove).
 SAFE_TO_REMOVE_STATES = frozenset({CLIENT_VERIFIED, CLIENT_RELEASED})
+
+logger = logging.getLogger("sts_upload.engine")
 
 
 class EngineError(RuntimeError):
@@ -423,8 +426,17 @@ class UploadEngine:
         return progress
 
     def _interrupt(self, progress: CardProgress, cause: Exception) -> None:
+        # Log the real cause: an interrupt is NOT always a pulled card - it is
+        # any start/chunk/finish transport failure. The UI used to mask all of
+        # these as "card removed", which hid server-side rejections.
+        logger.warning(
+            "Card %s (%s) interrupted: %s: %s",
+            progress.table, progress.card_uuid,
+            type(cause).__name__, cause,
+            exc_info=cause,
+        )
         progress.state = CLIENT_INTERRUPTED
-        progress.error = str(cause)
+        progress.error = f"{type(cause).__name__}: {cause}"
         self._save(progress, "interrupted")
 
     def _apply_server_card(self, progress: CardProgress, card: dict) -> None:
@@ -439,6 +451,12 @@ class UploadEngine:
 
     def _save(self, progress: CardProgress, event: str) -> None:
         progress.updated_at = _now()
+        logger.info(
+            "Card %s: %s (state=%s, %d/%d files, server_id=%s)",
+            progress.table, event, progress.state,
+            progress.sent_files, progress.expected_files,
+            progress.server_card_id,
+        )
         self._store.put(progress.card_uuid, progress.to_dict())
         if self._cb is not None:
             self._cb(progress, event)
