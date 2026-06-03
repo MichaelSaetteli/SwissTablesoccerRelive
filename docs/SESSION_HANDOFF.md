@@ -69,6 +69,36 @@ echten Server round-trip-getestet werden kann. Geliefert (414 Tests gruen,
 | **Secret-Rotation deferred** | `.env` auf NAS hat noch alte hartkodierte Werte | niedrig auf LAN, aber technische Schuld |
 | **Luecke A** (DCIM-Auto-Extraktion) | Pipeline-seitig | obsolet wenn Client-Tool (Issue #15) fertig ist |
 
+## 4a. Naechster Slice: UX-Politur des Upload-Tools (Operator-Feedback 2026-06-02)
+
+Aus dem ersten echten `.exe`-Test auf Windows. Das Tool funktioniert
+fachlich (Label->Tisch, .mp4-Whitelist, Upload), aber die Oberflaeche ist
+noch eine minimale Wireframe-Schicht. Eigener Slice:
+
+* **Gefuehrte, laientaugliche Oberflaeche** + sauberes/professionelles
+  Styling: Leerzustand mit Anleitung, eindeutige naechste Aktion
+  hervorgehoben, deaktivierte Buttons mit Erklaerung statt Raetselraten.
+* **Scan im Hintergrund**: das Einlesen laeuft aktuell im UI-Thread, das
+  Fenster friert beim Scannen kurz ein (bei vielen Karten spuerbar) -> in
+  einen Worker-Thread auslagern.
+* **Live-Fortschritt**: echter Fortschrittsbalken (Dateien UND Bytes) +
+  Tempo (MB/s) + Restzeit (ETA). Wichtig: **byte-genau INNERHALB einer
+  Datei** (eine Datei = ein ~850-MB-Request; heute bewegt sich minutenlang
+  nichts). Zaehler um den Upload-Stream, ressourcenschonend.
+* **Tabellen-Layout** (kleiner Quick-Fix, kann vorgezogen werden):
+  - Spalte „Fortschritt" viel zu breit (einzige Stretch-Spalte).
+  - Spaltenbreiten nicht anpassbar -> interaktives Resizing aktivieren.
+  - Spalte „Entfernen" ganz rechts abgeschnitten/unlesbar -> genug Breite
+    (langer Text „sicher entfernbar" / „Nicht entfernen…").
+* **Turniere-Tab: Aktivierung pro Disziplin.** Heute zeigt „Alle Turniere"
+  nur Doppel (`firstAvailableDiscipline` in `web/static/app.js`), und der
+  „aktivieren"-Button aktiviert nur fuer diese eine Disziplin -> Einzel
+  laesst sich im GUI nicht aktivieren (nur via API). UI muss pro Disziplin
+  Status zeigen + Auswahl bieten. Erwartete Kartenzahl (`expected_cards_*`)
+  fehlt im Anlegen-Formular ganz -> ergaenzen.
+
+Detail-Design + bisherige Umsetzung: [`UPLOAD_CLIENT_INGEST.md`](UPLOAD_CLIENT_INGEST.md).
+
 ## 5. Was die letzte Session geliefert hat (Issue #15 Slice 1)
 
 * `upload_staging/`-Paket: paths, manifest, atomic-handoff, service
@@ -288,6 +318,14 @@ sich Reibungspunkte aus den letzten Sessions:
    Files unter dem `paths.logs`-Verzeichnis aus der Config (typisch
    `/volume3/HDD11TB/pipeline_logs/`). Wer ffmpeg-Errors sucht: dort
    gucken, nicht in `docker logs`.
+6. **Die NAS MUSS auf `claude/wizardly-goodall-df2er` stehen.** Dort lebt
+   der Upload-Server (`/api/upload/*`). Wurde im Test auf einem alten Branch
+   (`read-briefing-start-build`) angetroffen -> der Upload-Client bekam
+   **HTTP 405** auf `GET /api/upload/active-tournament`, weil die Route dort
+   fehlt/anders ist. Symptom-Check: `git branch --show-current` auf der NAS;
+   Fix: `git checkout claude/wizardly-goodall-df2er && git pull && sudo
+   docker compose build && sudo docker compose up -d`. Ein wechselnder
+   Branch deutet auf eine zweite (NAS-)Claude-Session oder manuellen Checkout.
 
 ## 8. Test-Daten, die jetzt auf der NAS liegen
 
