@@ -179,6 +179,31 @@ def test_single_instance_lock_blocks_second_acquire(qapp, tmp_path):
     second.unlock()
 
 
+def test_fmt_hms_formats_elapsed():
+    assert MainWindow._fmt_hms(0) == "0:00"
+    assert MainWindow._fmt_hms(65) == "1:05"
+    assert MainWindow._fmt_hms(3661) == "1:01:01"
+
+
+def test_duration_column_runs_then_freezes(qapp):
+    from upload_client.ui.main_window import _COL_DURATION
+    from upload_client.upload_engine import CLIENT_UPLOADING
+
+    mgr = StubManager(_snapshot([_row("u1", "ET01", CLIENT_UPLOADING)]))
+    win = MainWindow(mgr, scan_fn=lambda: {}, poll_ms=10_000)
+    idx = win._row_of["u1"]
+    # Uploading -> a running clock (mm:ss) is shown and the start is recorded.
+    assert win.table.item(idx, _COL_DURATION).text() != ""
+    assert "u1" in win._dur_start
+    assert "u1" not in win._dur_end
+
+    # Transition to verified -> the duration freezes (end time recorded).
+    mgr._snap = _snapshot([_row("u1", "ET01", CLIENT_VERIFIED)])
+    win.refresh()
+    assert "u1" in win._dur_end
+    assert win.table.item(idx, _COL_DURATION).text() != ""
+
+
 def test_select_all_toggles_every_checkbox(qapp):
     rows = [_row("u1", "ET01", CLIENT_VERIFIED), _row("u2", "ET02", CLIENT_VERIFIED)]
     win = MainWindow(StubManager(_snapshot(rows)), scan_fn=lambda: {}, poll_ms=10_000)

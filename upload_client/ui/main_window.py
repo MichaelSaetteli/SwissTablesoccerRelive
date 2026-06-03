@@ -46,10 +46,12 @@ from upload_client.upload_engine import (
     CLIENT_VERIFIED,
 )
 
-# Table columns
-(_COL_SEL, _COL_TABLE, _COL_DISC, _COL_PROG, _COL_STATUS, _COL_DATE,
- _COL_SAFE) = range(7)
-_HEADERS = ["Freigabe", "Tisch", "Disziplin", "Fortschritt", "Status", "Datum", ""]
+# Table columns. "Datum" is last so it absorbs the slack (stretch-last);
+# every column is user-resizable (Interactive).
+(_COL_SEL, _COL_TABLE, _COL_DISC, _COL_PROG, _COL_DURATION, _COL_STATUS,
+ _COL_SAFE, _COL_DATE) = range(8)
+_HEADERS = ["Freigabe", "Tisch", "Disziplin", "Fortschritt", "Dauer",
+            "Status", "", "Datum"]
 
 _ERROR_BG = QColor(0xFD, 0xE7, 0xE9)
 _DONE_BG = QColor(0xE6, 0xF4, 0xEA)
@@ -286,6 +288,12 @@ class MainWindow(QMainWindow):
         self._speed_data: Dict[str, Tuple[float, int]] = {}
         self._speed_cache: Dict[str, float] = {}  # key -> bytes/s (smoothed)
 
+        # Per-card duration: wall-clock start when the card first uploads, and
+        # the frozen end time once it is verified/released. So the "Dauer"
+        # column runs live while uploading and then stops at the final value.
+        self._dur_start: Dict[str, float] = {}   # key -> time.time() at start
+        self._dur_end: Dict[str, float] = {}     # key -> time.time() when done
+
         title = "STS-Upload"
         if tournament_name:
             title += f"  —  {tournament_name}"
@@ -398,19 +406,20 @@ class MainWindow(QMainWindow):
         self.table.setAlternatingRowColors(False)
         self.table.setSelectionMode(QTableWidget.NoSelection)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(_COL_SEL,   QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_TABLE,  QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_DISC,   QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_PROG,   QHeaderView.Stretch)
-        header.setSectionResizeMode(_COL_STATUS, QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_DATE,   QHeaderView.Fixed)
-        header.setSectionResizeMode(_COL_SAFE,   QHeaderView.Fixed)
-        self.table.setColumnWidth(_COL_SEL,   72)
-        self.table.setColumnWidth(_COL_TABLE, 70)
-        self.table.setColumnWidth(_COL_DISC,  110)
+        # Every column is user-resizable; "Datum" (last) stretches to absorb
+        # any slack so there is no awkward trailing gap.
+        for col in (_COL_SEL, _COL_TABLE, _COL_DISC, _COL_PROG, _COL_DURATION,
+                    _COL_STATUS, _COL_SAFE, _COL_DATE):
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
+        header.setStretchLastSection(True)
+        self.table.setColumnWidth(_COL_SEL,     70)
+        self.table.setColumnWidth(_COL_TABLE,   60)
+        self.table.setColumnWidth(_COL_DISC,   100)
+        self.table.setColumnWidth(_COL_PROG,   300)  # sensible default, draggable
+        self.table.setColumnWidth(_COL_DURATION, 75)
         self.table.setColumnWidth(_COL_STATUS, 110)
-        self.table.setColumnWidth(_COL_DATE,   95)
-        self.table.setColumnWidth(_COL_SAFE,   32)
+        self.table.setColumnWidth(_COL_SAFE,    32)
+        self.table.setColumnWidth(_COL_DATE,    95)
         self.table.setRowHeight(0, 36)
         self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
         # The "Freigabe" checkbox is only for picking which verified cards to
@@ -601,6 +610,8 @@ class MainWindow(QMainWindow):
         self._rows_by_key.clear()
         self._speed_data.clear()
         self._speed_cache.clear()
+        self._dur_start.clear()
+        self._dur_end.clear()
         self.lbl_hint.setVisible(False)
         self.refresh()
 
@@ -643,6 +654,33 @@ class MainWindow(QMainWindow):
         if sent_bytes > 0:
             self._speed_data[key] = (now, sent_bytes)
         return self._speed_cache.get(key)
+
+    @staticmethod
+    def _fmt_hms(seconds: float) -> str:
+        s = max(0, int(seconds))
+        h, rem = divmod(s, 3600)
+        m, s = divmod(rem, 60)
+        if h:
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m}:{s:02d}"
+
+    def _duration_text(self, row) -> str:
+        """Elapsed time for a card: live while uploading, frozen when done."""
+        key = row.key
+        done_states = (CLIENT_VERIFIED, CLIENT_RELEASED)
+        if row.state == CLIENT_UPLOADING:
+            # Start the clock the first time we see the card uploading.
+            self._dur_start.setdefault(key, time.time())
+            self._dur_end.pop(key, None)
+            return self._fmt_hms(time.time() - self._dur_start[key])
+        if row.state in done_states and key in self._dur_start:
+            # Freeze at the moment it first reached a done state.
+            end = self._dur_end.setdefault(key, time.time())
+            return self._fmt_hms(end - self._dur_start[key])
+        # Pending / interrupted / failed / never-started -> no running clock.
+        if key in self._dur_start and key in self._dur_end:
+            return self._fmt_hms(self._dur_end[key] - self._dur_start[key])
+        return ""
 
     def _format_progress(self, row) -> Tuple[int, str]:
         """Return (percent 0-100, label text) for the progress bar."""
@@ -749,7 +787,8 @@ class MainWindow(QMainWindow):
             self.table.setItem(idx, _COL_SEL, sel)
 
             # Plain-text cells
-            for col in (_COL_TABLE, _COL_STATUS, _COL_DATE, _COL_SAFE):
+            for col in (_COL_TABLE, _COL_DURATION, _COL_STATUS, _COL_DATE,
+                        _COL_SAFE):
                 self.table.setItem(idx, col, QTableWidgetItem(""))
 
             # Discipline dropdown
@@ -771,6 +810,11 @@ class MainWindow(QMainWindow):
 
         # Table name
         self.table.item(idx, _COL_TABLE).setText(row.table)
+
+        # Duration: runs live while uploading, freezes once verified/released.
+        dur_item = self.table.item(idx, _COL_DURATION)
+        dur_item.setText(self._duration_text(row))
+        dur_item.setTextAlignment(Qt.AlignCenter)
 
         # Discipline dropdown
         combo = self._disc_combos[row.key]
@@ -838,7 +882,8 @@ class MainWindow(QMainWindow):
             bg = _UPLOAD_BG
         else:
             bg = QColor(Qt.white)
-        for col in (_COL_SEL, _COL_TABLE, _COL_STATUS, _COL_DATE, _COL_SAFE):
+        for col in (_COL_SEL, _COL_TABLE, _COL_DURATION, _COL_STATUS,
+                    _COL_DATE, _COL_SAFE):
             cell = self.table.item(idx, col)
             if cell is not None:
                 cell.setBackground(bg)
