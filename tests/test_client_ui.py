@@ -122,7 +122,11 @@ def test_buttons_call_manager(qapp):
     win.on_release_all()
     assert ("release_all",) in mgr.calls
 
+    # on_scan now runs the mount discovery in a background thread; wait for it.
     win.on_scan()
+    if win._scan_thread is not None:
+        win._scan_thread.join(timeout=5.0)
+    win._check_scan_result()
     assert any(c[0] == "add" for c in mgr.calls)
 
 
@@ -196,6 +200,10 @@ def test_tick_polls_watcher_and_handles_removal(qapp):
                      poll_ms=10_000)
     # __init__ ran one _tick already, which polled the scripted removal.
     assert any(c[0] == "handle_removed" for c in mgr.calls)
+    # The re-scan runs in a background thread; flush it before asserting.
+    if win._scan_thread is not None:
+        win._scan_thread.join(timeout=5.0)
+    win._check_scan_result()
     assert any(c[0] == "add" for c in mgr.calls)  # re-scan on change
 
 
@@ -262,6 +270,9 @@ def test_per_card_discipline_combo_sets_override(qapp):
                      poll_ms=10_000)
     win._disc_combos["uuid:vol-1"].setCurrentText("Doppel")
     assert state.discipline_overrides["vol-1"] == "Doppel"
+    if win._scan_thread is not None:
+        win._scan_thread.join(timeout=5.0)
+    win._check_scan_result()
     assert any(c[0] == "update_pending" for c in win._manager.calls)
 
 
@@ -299,4 +310,7 @@ def test_dcim_dialog_stores_subdir_override(qapp):
                      dcim_dialog_factory=StubDialog, poll_ms=10_000)
     win.open_dcim_selection("uuid:vol-9")
     assert state.subdir_overrides["vol-9"] == {"NEW"}
+    if win._scan_thread is not None:
+        win._scan_thread.join(timeout=5.0)
+    win._check_scan_result()
     assert any(c[0] == "update_pending" for c in win._manager.calls)

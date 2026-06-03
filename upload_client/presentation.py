@@ -135,6 +135,10 @@ class CardRow:
     dcim_folders: tuple = ()         # DcimFolder list (for the selection dialog)
     selected_subdirs: tuple = ()     # currently selected DCIM names
     editable_discipline: bool = False  # True until the upload has started
+    # Raw progress numbers for progress bars and speed calculation.
+    sent_bytes: int = 0
+    expected_bytes: int = 0
+    sent_files: int = 0
 
 
 def row_for_progress(p: CardProgress) -> CardRow:
@@ -161,6 +165,9 @@ def row_for_progress(p: CardProgress) -> CardRow:
         is_error=p.state == CLIENT_FAILED,
         error_detail=p.error if p.state == CLIENT_FAILED else None,
         card_uuid=p.card_uuid,
+        sent_bytes=p.received_bytes,
+        expected_bytes=p.expected_bytes,
+        sent_files=p.sent_files,
     )
 
 
