@@ -766,6 +766,20 @@ def get_storage_snapshot(volume_paths: List[Path]) -> Dict[str, object]:
 
 # ---- Archive --------------------------------------------------------------
 
+def _archive_sources_for(config: PipelineConfig) -> Dict[str, Dict[str, Path]]:
+    # work_ holds the originals after the pipeline's eingang->work move;
+    # without it the archive would miss every original from a completed
+    # run. eingang_ stays in the plan as a safety net for runs that were
+    # aborted before the move (originals still sit there).
+    return {
+        config.discipline: {
+            "eingang": config.paths.eingang,
+            "work":    config.paths.work,
+            "output":  config.paths.output,
+        },
+    }
+
+
 def build_archive_plan_for(
     config: PipelineConfig,
     *,
@@ -783,12 +797,7 @@ def build_archive_plan_for(
     if t is None:
         return None
 
-    sources = {
-        config.discipline: {
-            "eingang": config.paths.eingang,
-            "output":  config.paths.output,
-        },
-    }
+    sources = _archive_sources_for(config)
     try:
         plan = build_archive_plan(
             tournament_name=t.name,
@@ -827,12 +836,7 @@ def start_archive_async(
         t = get_tournament(conn, tournament_id)
         if t is None:
             return
-        sources = {
-            config.discipline: {
-                "eingang": config.paths.eingang,
-                "output":  config.paths.output,
-            },
-        }
+        sources = _archive_sources_for(config)
         try:
             plan = build_archive_plan(
                 tournament_name=t.name,

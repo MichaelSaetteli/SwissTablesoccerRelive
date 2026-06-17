@@ -79,28 +79,44 @@ workflows („Videos rausziehen / flachziehen") ist nicht automatisiert.
 
 ---
 
-## 2026-05-24 — Luecke B: Archiv-Flow zielt auf leeres Verzeichnis (Status: offen, HOHE Prioritaet)
+## 2026-05-25 — Luecke B BEHOBEN: Archiv-Flow nimmt jetzt `work_` mit auf
 
-**Problem:**
+**Fix (Branch `fix/archive-originals-from-work`):**
+* Neuer Helper `_archive_sources_for(config)` in `web/services.py` liefert
+  `eingang_` + `work_` + `output_` als Archiv-Quellen.
+* `build_archive_plan_for()` und `start_archive_async()` nutzen den
+  Helper statt jeweils ein eigenes Dict.
+* Wirkung: Original-Clips (umbenannt zu `video_*.mp4`, leben nach dem
+  eingang→work-Move in `work_<disziplin>/ETxx/`) landen jetzt im
+  permanenten HDD-Archiv, bevor das Tiering sie ins 7-Tage-Staging
+  schiebt.
+* `eingang_` bleibt als Safety-Net drin, fuer den seltenen Fall eines
+  Run-Abbruchs vor dem Move.
+
+**Testabdeckung:** `tests/test_archive_service.py` —
+* `test_archive_sources_include_work_for_originals` (Helper-Vertrag)
+* `test_archive_plan_walks_originals_from_work` (E2E: Datei in
+  `work_/ET20/` wird vom Plan eingesammelt)
+
+**Bewusst NICHT geaendert (Out-of-Scope dieser Aenderung):**
+* Trennung von „Originale archivieren" und „Uploads loeschen" in zwei
+  separate Operator-Aktionen. Heute: ein Knopf archiviert beides auf
+  HDD und loescht von SSD. Falls separate Aktionen gewuenscht → eigenes
+  Issue.
+* Auto-Trigger des Archivs nach Upload-Erfolg. Heute manuell durch
+  Operator.
+
+**Urspruengliche Problembeschreibung (Historie):**
 * Pipeline-Schritt 3 verschiebt `eingang_<disziplin>/ETxx` →
   `work_<disziplin>/ETxx` (atomarer Rename).
 * Nach dem Run ist `eingang_<disziplin>/` leer, die Originale liegen in
   `work_<disziplin>/`.
-* Der Archiv-Flow archiviert aber `eingang_` (leer) + `output_`.
+* Der Archiv-Flow archivierte aber nur `eingang_` (leer) + `output_`.
 * Tiering verschiebt `work_` und `output_` auf HDD-Staging, Retention 7
   Tage → danach geloescht.
-
-**Konsequenz:** Operator-Wunsch „Originale dauerhaft archivieren"
-(Schritt 8) ist nicht erfuellt. Risiko nach echtem Turnier: Original-
-Aufnahmen nach 7 Tagen verloren.
-
-**Entscheidung:**
-* Fix MUSS vor dem ersten echten Turnier-Run erfolgen.
-* Reihenfolge:
-  1. End-to-End-Test mit Testdaten (Verlust akzeptabel)
-  2. Luecke B fixen (Archiv-Flow auf `work_` umstellen, „delete uploads"
-     sauber davon trennen)
-  3. Luecke A als separates Issue angehen
+* Konsequenz: Operator-Wunsch „Originale dauerhaft archivieren"
+  (Schritt 8) war nicht erfuellt; Risiko nach echtem Turnier Original-
+  Aufnahmen nach 7 Tagen zu verlieren.
 
 ---
 
